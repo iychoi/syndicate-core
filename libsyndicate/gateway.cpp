@@ -38,7 +38,7 @@
 /// gateway for which we are running the main() loop
 static struct SG_gateway* g_main_gateway = NULL;
 
-/// alloc a gateway 
+/// alloc a gateway
 struct SG_gateway* SG_gateway_new(void) {
    return SG_CALLOC( struct SG_gateway, 1 );
 }
@@ -50,7 +50,7 @@ struct SG_gateway* SG_gateway_new(void) {
 int SG_IO_hints_init( struct SG_IO_hints* io_hints, int io_type, uint64_t offset, uint64_t len ) {
 
    memset( io_hints, 0, sizeof(struct SG_IO_hints));
-   
+
    io_hints->io_type = io_type;
    io_hints->io_context = md_random64();
    io_hints->offset = offset;
@@ -97,22 +97,22 @@ uint64_t* SG_IO_hints_get_block_vec( struct SG_IO_hints* io_hints, int* num_bloc
 }
 
 /**
- * @brief Initialize an empty request data structure 
+ * @brief Initialize an empty request data structure
  * @note Always succeeds
  * @retval 0
  */
 int SG_request_data_init( struct SG_request_data* reqdat ) {
-   
+
    memset( reqdat, 0, sizeof( struct SG_request_data) );
-   
+
    reqdat->volume_id = SG_INVALID_VOLUME_ID;
    reqdat->block_id = SG_INVALID_BLOCK_ID;
    reqdat->file_id = SG_INVALID_FILE_ID;
    reqdat->coordinator_id = SG_INVALID_GATEWAY_ID;
-   
+
    reqdat->manifest_timestamp.tv_sec = -1;
    reqdat->manifest_timestamp.tv_nsec = -1;
-   
+
    reqdat->user_id = SG_INVALID_USER_ID;
    reqdat->io_hints.io_type = SG_IO_NONE;
 
@@ -121,23 +121,23 @@ int SG_request_data_init( struct SG_request_data* reqdat ) {
 
 
 /**
- * @brief Init common fields of a request data 
- * @retval 0 Success 
- * @retval -ENOMEM Out of Memory 
+ * @brief Init common fields of a request data
+ * @retval 0 Success
+ * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_init_common( struct SG_gateway* gateway, char const* fs_path, uint64_t file_id, int64_t file_version, struct SG_request_data* reqdat ) {
 
    struct ms_client* ms = SG_gateway_ms( gateway );
    uint64_t volume_id = ms_client_get_volume_id( ms );
-   
+
    char* fs_path_dup = SG_strdup_or_null( fs_path );
-   
+
    if( fs_path_dup == NULL && fs_path != NULL ) {
       return -ENOMEM;
    }
-   
+
    SG_request_data_init( reqdat );
-   
+
    reqdat->fs_path = fs_path_dup;
    reqdat->volume_id = volume_id;
    reqdat->file_id = file_id;
@@ -150,8 +150,8 @@ int SG_request_data_init_common( struct SG_gateway* gateway, char const* fs_path
 
 
 /**
- * @brief Initialize a request data structure for a block 
- * @retval 0 Success 
+ * @brief Initialize a request data structure for a block
+ * @retval 0 Success
  * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_init_block( struct SG_gateway* gateway, char const* fs_path, uint64_t file_id, int64_t file_version, uint64_t block_id, int64_t block_version, struct SG_request_data* reqdat ) {
@@ -163,15 +163,15 @@ int SG_request_data_init_block( struct SG_gateway* gateway, char const* fs_path,
 
    reqdat->block_id = block_id;
    reqdat->block_version = block_version;
-   
+
    return 0;
 }
 
 
 /**
- * @brief Initialize a reqeust data structure for a manifest 
- * @retval 0 Success 
- * @retval -ENOMEM Out of Memory 
+ * @brief Initialize a reqeust data structure for a manifest
+ * @retval 0 Success
+ * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_init_manifest( struct SG_gateway* gateway, char const* fs_path, uint64_t file_id, int64_t file_version, int64_t manifest_mtime_sec, int32_t manifest_mtime_nsec, struct SG_request_data* reqdat ) {
 
@@ -179,77 +179,77 @@ int SG_request_data_init_manifest( struct SG_gateway* gateway, char const* fs_pa
    if( rc != 0 ) {
       return rc;
    }
-   
+
    reqdat->manifest_timestamp.tv_sec = manifest_mtime_sec;
    reqdat->manifest_timestamp.tv_nsec = manifest_mtime_nsec;
-   
+
    return 0;
 }
 
 
 /**
- * @brief Initialize a request data structure for setting an xattr 
- * @retval 0 Success 
- * @retval -ENOMEM Out of Memory 
+ * @brief Initialize a request data structure for setting an xattr
+ * @retval 0 Success
+ * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_init_setxattr( struct SG_gateway* gateway, char const* fs_path, uint64_t file_id, int64_t file_version, int64_t xattr_nonce, char const* name, char const* value, size_t value_len, struct SG_request_data* reqdat ) {
 
    if( name == NULL || value == NULL ) {
       return -EINVAL;
    }
-   
+
    char* name_dup = SG_strdup_or_null( name );
    if( name_dup == NULL ) {
       return -ENOMEM;
    }
-   
+
    char* value_dup = SG_CALLOC( char, value_len );
    if( value_dup == NULL ) {
       SG_safe_free( name_dup );
       return -ENOMEM;
    }
-   
+
    int rc = SG_request_data_init_common( gateway, fs_path, file_id, file_version, reqdat );
    if( rc != 0 ) {
       SG_safe_free( name_dup );
       SG_safe_free( value_dup );
       return -ENOMEM;
    }
-   
+
    reqdat->setxattr = true;
    reqdat->xattr_name = name_dup;
    reqdat->xattr_value = value_dup;
    reqdat->xattr_value_len = value_len;
-   
+
    return 0;
 }
 
 
 /**
- * @brief Initialize a request data structure for removing an xattr 
- * @retval 0 Success 
- * @retval -ENOMEM Out of Memory 
+ * @brief Initialize a request data structure for removing an xattr
+ * @retval 0 Success
+ * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_init_removexattr( struct SG_gateway* gateway, char const* fs_path, uint64_t file_id, int64_t file_version, int64_t xattr_nonce, char const* name, struct SG_request_data* reqdat ) {
 
    if( name == NULL ) {
       return -EINVAL;
    }
-   
+
    char* name_dup = SG_strdup_or_null( name );
    if( name_dup == NULL ) {
       return -ENOMEM;
    }
-   
+
    int rc = SG_request_data_init_common( gateway, fs_path, file_id, file_version, reqdat );
    if( rc != 0 ) {
       SG_safe_free( name_dup );
       return -ENOMEM;
    }
-   
+
    reqdat->removexattr = true;
    reqdat->xattr_name = name_dup;
-   
+
    return 0;
 }
 
@@ -257,14 +257,14 @@ int SG_request_data_init_removexattr( struct SG_gateway* gateway, char const* fs
 /**
  * @brief Parse an SG request from a URL.
  * @retval 0 Success
- * @retval -EINVAL The URL is malformed 
+ * @retval -EINVAL The URL is malformed
  * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path ) {
-   
+
    memset( reqdat, 0, sizeof(struct SG_request_data) );
-  
-   // sanity check 
+
+   // sanity check
    if( strlen(_url_path) < 5 ) {
       return -EINVAL;
    }
@@ -272,10 +272,10 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
    if( strstr( _url_path, "/../" ) != NULL || strcmp( _url_path + strlen(_url_path) - 3, "/.." ) == 0 ) {
       return -EINVAL;
    }
-   
+
    char* url_path = SG_strdup_or_null( _url_path );
    if( url_path == NULL ) {
-      
+
       return -ENOMEM;
    }
 
@@ -308,7 +308,7 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
    char* xattr_name = NULL;
    char* xattr_nonce_str = NULL;
    int64_t xattr_nonce = 0;
-   
+
    bool is_getxattr = false;
    bool is_listxattr = false;
 
@@ -326,7 +326,7 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
    // minimum number of parts: data prefix, volume_id, path.file_id.file_version, (block.version || manifest.tv_sec.tv_nsec || xattr_name.xattr_nonce || xattr_nonce)
    if( num_seps < 4 ) {
       rc = -EINVAL;
-      
+
       SG_error("num_seps = %d\n", num_seps );
       SG_safe_free( url_path );
       return rc;
@@ -334,17 +334,17 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
 
    num_parts = num_seps;
    parts = SG_CALLOC( char*, num_seps + 1 );
-   
+
    if( parts == NULL ) {
       rc = -ENOMEM;
       SG_safe_free( url_path );
-      
+
       return rc;
    }
-   
+
    tmp = NULL;
    cursor = url_path;
-   
+
    for( int i = 0; i < num_seps; i++ ) {
       char* tok = strtok_r( cursor, "/", &tmp );
       cursor = NULL;
@@ -355,7 +355,7 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
 
       parts[i] = tok;
    }
-   
+
    prefix = parts[0];
    volume_id_str = parts[1];
    file_name_id_and_version_part = num_parts-2;
@@ -364,12 +364,12 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
    xattr_name_and_nonce_part = num_parts-1;
 
    if( strcmp(prefix, SG_DATA_PREFIX) != 0 ) {
-      
+
       if( strcmp( prefix, SG_GETXATTR_PREFIX ) == 0 ) {
-         
+
          is_getxattr = true;
-                 
-         // parse name and nonce 
+
+         // parse name and nonce
          xattr_name = strdup(parts[xattr_name_and_nonce_part]);
          if( xattr_name == NULL ) {
             rc = -ENOMEM;
@@ -379,29 +379,29 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
          xattr_nonce_str = md_rchomp( xattr_name, '.' );
          if( xattr_nonce_str == NULL ) {
             SG_error("Invalid getxattr string '%s'\n", parts[xattr_name_and_nonce_part]);
-           
-            SG_safe_free( xattr_name ); 
+
+            SG_safe_free( xattr_name );
             rc = -EINVAL;
             goto SG_request_data_parse_end;
          }
-         
+
          xattr_nonce = (int64_t)strtoll( xattr_nonce_str, &tmp, 10 );
          if( xattr_nonce == 0 && *tmp != '\0') {
             SG_error("Invalid getxattr nonce '%s'\n", xattr_nonce_str );
-            
+
             rc = -EINVAL;
             goto SG_request_data_parse_end;
          }
       }
       else if( strcmp( prefix, SG_LISTXATTR_PREFIX ) == 0 ) {
-         
+
          is_listxattr = true;
       }
       else {
-            
+
          // invalid prefix
          SG_error("Invalid URL prefix = '%s'\n", prefix);
-         
+
          rc = -EINVAL;
          goto SG_request_data_parse_end;
       }
@@ -410,13 +410,13 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
    // volume ID?
    rc = md_parse_uint64( volume_id_str, "%" PRIu64, &volume_id );
    if( rc < 0 ) {
-      
+
       SG_error("could not parse '%s'\n", volume_id_str);
-      
+
       rc = -EINVAL;
       goto SG_request_data_parse_end;
    }
-   
+
    // is this a manifest request?
    if( strncmp( parts[manifest_part], "manifest", strlen("manifest") ) == 0 ) {
       rc = md_parse_manifest_timestamp( parts[manifest_part], &manifest_timestamp );
@@ -425,80 +425,80 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
          is_manifest = true;
       }
       else {
-         
+
          SG_error("md_parse_manifest_timestamp('%s') rc = %d\n", parts[manifest_part], rc );
-         
+
          rc = -EINVAL;
          goto SG_request_data_parse_end;
       }
    }
 
    if( !is_manifest && !is_getxattr && !is_listxattr ) {
-      
-      // not a manifest request or xattr request, so we must have a block ID and block version 
+
+      // not a manifest request or xattr request, so we must have a block ID and block version
       rc = md_parse_block_id_and_version( parts[block_id_and_version_part], &block_id, &block_version );
       if( rc != 0 ) {
          // invalid request--neither a manifest nor a block ID
          SG_error("could not parse '%s'\n", parts[block_id_and_version_part]);
-         
+
          rc = -EINVAL;
          goto SG_request_data_parse_end;
       }
    }
-   
+
    // parse file ID and version
    rc = md_parse_file_id_and_version( parts[file_name_id_and_version_part], &file_id, &file_version );
    if( rc != 0 ) {
-      // invalid 
+      // invalid
       SG_error("could not parse ID and/or version of '%s'\n", parts[file_name_id_and_version_part] );
-      
+
       rc = -EINVAL;
       goto SG_request_data_parse_end;
    }
-   
+
    // clear file version
    tmp = md_rchomp( parts[file_name_id_and_version_part], '.' );
    if( tmp == NULL ) {
-      
-      // invalid 
+
+      // invalid
       SG_error("No file version in '%s'\n", parts[file_name_id_and_version_part]);
-      
+
       rc = -EINVAL;
       goto SG_request_data_parse_end;
    }
-   
-   // clear file ID 
+
+   // clear file ID
    tmp = md_rchomp( parts[file_name_id_and_version_part], '.' );
    if( tmp == NULL ) {
-      
-      // invalid 
+
+      // invalid
       SG_error("No file ID in '%s'\n", parts[file_name_id_and_version_part]);
-      
+
       rc = -EINVAL;
       goto SG_request_data_parse_end;
    }
-   
+
    // assemble the path
    for( int i = 2; i <= file_name_id_and_version_part; i++ ) {
       file_path_len += strlen(parts[i]) + 2;
    }
 
    file_path = SG_CALLOC( char, file_path_len + 1 );
-   
+
    if( file_path == NULL ) {
-      
+
       SG_safe_free( parts );
       SG_safe_free( url_path );
-      
+
       rc = -ENOMEM;
       return rc;
    }
-   
+
    for( int i = 2; i <= file_name_id_and_version_part; i++ ) {
       strcat( file_path, "/" );
       strcat( file_path, parts[i] );
    }
-   
+
    reqdat->volume_id = volume_id;
    reqdat->fs_path = file_path;
    reqdat->file_id = file_id;
@@ -510,7 +510,7 @@ int SG_request_data_parse( struct SG_request_data* reqdat, char const* _url_path
    reqdat->listxattr = is_listxattr;
    reqdat->xattr_name = xattr_name;
    reqdat->xattr_nonce = xattr_nonce;
-   
+
 SG_request_data_parse_end:
    SG_safe_free( parts );
    SG_safe_free( url_path );
@@ -520,20 +520,20 @@ SG_request_data_parse_end:
 
 
 /**
- * @brief Duplicate an SG_request_data's fields 
+ * @brief Duplicate an SG_request_data's fields
  * @retval 0 Success
  * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_dup( struct SG_request_data* dest, struct SG_request_data* src ) {
-   
+
    SG_request_data_init( dest );
-   
+
    char* fs_path = SG_strdup_or_null( src->fs_path );
    if( fs_path == NULL && src->fs_path != NULL ) {
-      
+
       return -ENOMEM;
    }
-   
+
    char* new_path = SG_strdup_or_null( src->new_path );
    if( new_path == NULL && src->new_path != NULL ) {
 
@@ -542,7 +542,7 @@ int SG_request_data_dup( struct SG_request_data* dest, struct SG_request_data* s
    }
 
    memcpy( dest, src, sizeof(struct SG_request_data) );
-   
+
    // deep copy
    dest->fs_path = fs_path;
    dest->new_path = new_path;
@@ -556,17 +556,17 @@ int SG_request_data_dup( struct SG_request_data* dest, struct SG_request_data* s
  * @retval False Not a request for a block
  */
 bool SG_request_is_block( struct SG_request_data* reqdat ) {
-  
+
    return (reqdat->block_id != SG_INVALID_BLOCK_ID);
 }
 
 /**
  * @brief Check if this is a request for a manifest.  Can also mean a request for a RENAME_HINT
- * @retval True Request for manifest or RENAME_HINT 
+ * @retval True Request for manifest or RENAME_HINT
  * @retval False Not request for manifest or RENAME_HINT
  */
 bool SG_request_is_manifest( struct SG_request_data* reqdat ) {
-   
+
    return (reqdat->block_id == SG_INVALID_BLOCK_ID && !reqdat->getxattr && !reqdat->listxattr &&
           !reqdat->removexattr && !reqdat->setxattr);
 }
@@ -599,7 +599,7 @@ bool SG_request_is_getxattr( struct SG_request_data* reqdat ) {
  * @retval False Not a request for an xattr list
  */
 bool SG_request_is_listxattr( struct SG_request_data* reqdat ) {
-   
+
    return reqdat->listxattr;
 }
 
@@ -647,17 +647,17 @@ int SG_request_data_set_IO_hints( struct SG_request_data* reqdat, struct SG_IO_h
 /**
  * @brief Merge opts and config, opts overriding the config
  * @retval 0 Success
- * @retval -ENOMEM Out of Memory 
+ * @retval -ENOMEM Out of Memory
  */
 static int SG_config_merge_opts( struct md_syndicate_conf* conf, struct md_opts* opts ) {
-   
+
    // Set maximum of command-line and file-given debug levels
    md_set_debug_level( MAX( opts->debug_level, md_get_debug_level() ) );
    conf->is_client = opts->client;
 
-   // pass on driver parameters 
+   // pass on driver parameters
    int rc = md_conf_set_driver_params( conf, opts->driver_exec_str, opts->driver_roles, opts->num_driver_roles );
-   
+
    return rc;
 }
 
@@ -669,80 +669,80 @@ static int SG_config_merge_opts( struct md_syndicate_conf* conf, struct md_opts*
  * @retval -ENOENT There is no driver for this gateway
  * @retval -ENOMEM Out of Memory
  * @retval -errno Failure to initialize the driver
- * @todo Use of anonymous gateway drivers 
+ * @todo Use of anonymous gateway drivers
  */
 static int SG_gateway_driver_init_internal( struct ms_client* ms, struct md_syndicate_conf* conf, struct SG_driver* driver, int num_instances ) {
-   
-   // get the driver text 
+
+   // get the driver text
    char* driver_text = NULL;
    uint64_t driver_text_len = 0;
    int rc = 0;
-   
+
    // get the driver text
    rc = ms_client_gateway_get_driver_text( ms, &driver_text, &driver_text_len );
    if( rc != 0 ) {
-      
+
       // TODO: anonymous gateway drivers
       if( rc == -EAGAIN ) {
          // no driver loaded at boot-time; use stub
-         
+
          if( conf->is_client ) {
             SG_warn("%s", "Anonymous gateway; using stub driver\n");
          }
          else {
             SG_warn("%s", "No driver loaded\n");
          }
-         
+
          return -ENOENT;
       }
-      
-      
+
+
       // some other error
       SG_error("ms_client_gateway_get_driver_text rc = %d\n", rc );
       return rc;
    }
-   
+
    // create the driver
    rc = SG_driver_init( driver, conf, ms->gateway_pubkey, ms->gateway_key, conf->driver_exec_path, conf->driver_roles, conf->num_driver_roles, num_instances, driver_text, driver_text_len );
-   
+
    SG_safe_free( driver_text );
-   
+
    return rc;
 }
 
 
 /**
- * @brief Get driver data for this gateway 
+ * @brief Get driver data for this gateway
  * @retval 0 Success, and populate driver_data with the raw text of the given field
- * @retval -ENONET The data requested is not available 
- * @retval -ENOMEM Out of Memory 
+ * @retval -ENONET The data requested is not available
+ * @retval -ENOMEM Out of Memory
  */
 int SG_gateway_driver_get_data( struct SG_gateway* gateway, char const* data_name, struct SG_chunk* driver_data ) {
-   
+
    int rc = 0;
    struct ms_client* ms = SG_gateway_ms( gateway );
    char* driver_text = NULL;
    size_t driver_len = 0;
    char* ret_data = NULL;
    size_t ret_data_len = 0;
-   
+
    rc = ms_client_gateway_get_driver_text( ms, &driver_text, &driver_len );
    if( rc != 0 ) {
-      
+
       SG_error("ms_client_gateway_get_driver_text rc = %d\n", rc );
       return rc;
    }
 
-   // look up the value 
+   // look up the value
    rc = SG_driver_get_string( driver_text, driver_len, data_name, &ret_data, &ret_data_len );
    SG_safe_free( driver_text );
-   
+
    if( rc != 0 ) {
-   
+
       SG_error("SG_driver_get_string('%s') rc = %d\n", data_name, rc );
       return rc;
    }
-   
+
    SG_chunk_init( driver_data, ret_data, ret_data_len );
    return 0;
 }
@@ -750,75 +750,75 @@ int SG_gateway_driver_get_data( struct SG_gateway* gateway, char const* data_nam
 
 /**
  * @brief Get the base64-decoded configuration text for this gateway.
- * @retval 0 Success, and populate the given config_data with the decoded configuration text 
- * @retval -ENOENT There is no config 
+ * @retval 0 Success, and populate the given config_data with the decoded configuration text
+ * @retval -ENOENT There is no config
  * @retval -ENOMEM Out of Memory
  */
 int SG_gateway_driver_get_config_text( struct SG_gateway* gateway, struct SG_chunk* config_data ) {
-  
+
    int rc = 0;
    struct SG_chunk config_b64;
    size_t len = 0;
-   
-   // look up new information 
+
+   // look up new information
    rc = SG_gateway_driver_get_data( gateway, "config", &config_b64 );
    if( rc != 0 ) {
-      
+
       SG_error("SG_gateway_driver_get_data('config') rc = %d\n", rc );
       return rc;
    }
-   
+
    // decode!
    rc = md_base64_decode( config_b64.data, config_b64.len, &config_data->data, &len );
    config_data->len = len;
    SG_chunk_free( &config_b64 );
-   
+
    if( rc != 0 ) {
-      
+
       SG_error("md_base64_decode('config') rc = %d\n", rc );
-      
+
       if( rc != -ENOMEM ) {
          rc = -EINVAL;
       }
-      
+
       return rc;
    }
-   
+
    return rc;
 }
 
 
 /**
  * @brief Get the decrypted, decoded, mlock'ed secrets text for this gateway.
- * @retval 0 Success, and populate the given secrets_data with the decoded secrets text 
- * @retval -ENOENT There are no secrets 
+ * @retval 0 Success, and populate the given secrets_data with the decoded secrets text
+ * @retval -ENOENT There are no secrets
  * @retval -ENOMEM Out of Memory
  */
 int SG_gateway_driver_get_mlocked_secrets_text( struct SG_gateway* gateway, struct SG_chunk* secrets_data ) {
-   
+
    int rc = 0;
    struct SG_chunk secrets_b64;
    char* secrets_str = NULL;
    size_t secrets_len = 0;
-   
-   // look up new information 
+
+   // look up new information
    rc = SG_gateway_driver_get_data( gateway, "secrets", &secrets_b64 );
    if( rc != 0 ) {
-      
+
       SG_error("SG_gateway_driver_get_data('secrets') rc = %d\n", rc );
       return rc;
    }
-   
-   // decrypt--it should have been encrypted by this gateway's key 
+
+   // decrypt--it should have been encrypted by this gateway's key
    // NOTE: secrets_str will have been mlock'ed
    rc = SG_driver_decrypt_secrets( SG_gateway_public_key( gateway ), SG_gateway_private_key( gateway ), &secrets_str, &secrets_len, secrets_b64.data, secrets_b64.len );
    SG_chunk_free( &secrets_b64 );
-   
+
    if( rc != 0 ) {
-      
+
       SG_error("SG_driver_decrypt_secrets rc = %d\n", rc );
    }
-   
+
    SG_chunk_init( secrets_data, secrets_str, secrets_len );
    return rc;
 }
@@ -826,53 +826,53 @@ int SG_gateway_driver_get_mlocked_secrets_text( struct SG_gateway* gateway, stru
 
 /**
  * @brief Get the decoded driver text for this gateway.
- * @retval 0 Success, and populate the given driver_data with the decoded driver image 
- * @retval -ENOENT There is no driver file 
- * @retval -ENOMEM Out of Memory 
+ * @retval 0 Success, and populate the given driver_data with the decoded driver image
+ * @retval -ENOENT There is no driver file
+ * @retval -ENOMEM Out of Memory
  */
 int SG_gateway_driver_get_driver_text( struct SG_gateway* gateway, struct SG_chunk* driver_data ) {
-   
+
    int rc = 0;
    struct SG_chunk driver_b64;
    size_t driver_len = 0;
-   
-   // look up the info 
+
+   // look up the info
    rc = SG_gateway_driver_get_data( gateway, "driver", &driver_b64 );
    if( rc != 0 ) {
-      
+
       SG_error("SG_gateway_driver_get_data('driver') rc = %d\n", rc );
       return rc;
    }
-   
+
    // decode!
    rc = md_base64_decode( driver_b64.data, driver_b64.len, &driver_data->data, &driver_len );
    driver_data->len = driver_len;
    SG_chunk_free( &driver_b64 );
-   
+
    if( rc != 0 ) {
-      
+
       SG_error("md_base64_decode('driver') rc = %d\n", rc );
-      
+
       if( rc != -ENOMEM ) {
          rc = -EINVAL;
       }
-      
+
       return rc;
    }
-   
+
    return rc;
 }
 
 
 /**
- * @brief Initialize and start the gateway, using a parsed options structure 
+ * @brief Initialize and start the gateway, using a parsed options structure
  * @retval 0 Success
- * @retval -ENOMEM Out of Memory 
- * @retval -ENOENT if a file was not found 
+ * @retval -ENOMEM Out of Memory
+ * @retval -ENOENT if a file was not found
  * @retval <0 libsyndicate fails to initialize
- */ 
+ */
 int SG_gateway_init_opts( struct SG_gateway* gateway, struct md_opts* opts ) {
-   
+
    int rc = 0;
    struct ms_client* ms = SG_CALLOC( struct ms_client, 1 );
    struct md_syndicate_conf* conf = SG_CALLOC( struct md_syndicate_conf, 1 );
@@ -881,11 +881,11 @@ int SG_gateway_init_opts( struct SG_gateway* gateway, struct md_opts* opts ) {
    struct SG_driver* driver = SG_driver_alloc();
    struct md_downloader* dl = md_downloader_new();
    struct md_wq* iowqs = NULL;
-   
+
    sem_t config_sem;
    sem_t config_finished_sem;
    pthread_mutex_t num_config_reload_waiters_lock;
-   
+
    bool md_inited = false;
    bool ms_inited = false;
    bool config_inited = false;
@@ -893,48 +893,48 @@ int SG_gateway_init_opts( struct SG_gateway* gateway, struct md_opts* opts ) {
    bool http_inited = false;
    bool driver_inited = false;
    bool dl_inited = false;
-   
-   uint64_t block_size = 0;   
+
+   uint64_t block_size = 0;
    int first_arg_optind = -1;
-   
+
    int num_iowqs = 0;
    int max_num_iowqs = 1; // 4 * sysconf( _SC_NPROCESSORS_CONF );       // I/O doesn't take much CPU...
-   
+
    if( ms == NULL || conf == NULL || cache == NULL || http == NULL || dl == NULL ) {
-      
+
       rc = -ENOMEM;
       goto SG_gateway_init_error;
    }
-   
+
    // load config
    md_default_conf( conf );
-   
+
    // set debug level
    md_set_debug_level( opts->debug_level );
-   
+
    SG_debug("%s", "### Syndicate gateway starting up... ###\n");
 
    // read the config file, if given
    if( opts->config_file != NULL ) {
-      
+
       rc = md_read_conf( opts->config_file, conf );
       if( rc != 0 ) {
          SG_error("md_read_conf('%s'), rc = %d\n", opts->config_file, rc );
-         
+
          goto SG_gateway_init_error;
       }
    }
-  
-   // fold in gateway implementation options 
+
+   // fold in gateway implementation options
    rc = SG_config_merge_opts( conf, opts );
    if( rc != 0 ) {
-      
+
       SG_error("SG_config_merge_opts rc = %d\n", rc );
-      
+
       goto SG_gateway_init_error;
    }
 
-   // validity 
+   // validity
    if( opts->gateway_name == NULL ) {
 
       SG_error("%s", "No gateway name defined\n");
@@ -948,22 +948,22 @@ int SG_gateway_init_opts( struct SG_gateway* gateway, struct md_opts* opts ) {
       rc = -EINVAL;
       goto SG_gateway_init_error;
    }
-  
-   // allocate I/O work queues 
+
+   // allocate I/O work queues
    iowqs = SG_CALLOC( struct md_wq, max_num_iowqs );
-   
+
    if( iowqs == NULL ) {
-      
-      // OOM 
+
+      // OOM
       rc = -ENOMEM;
       goto SG_gateway_init_error;
    }
-   
+
    // initialize library
    if( !opts->client ) {
-      
+
       if( opts->username == NULL ) {
-         
+
          SG_error("%s", "No username given\n");
          rc = -EINVAL;
          goto SG_gateway_init_error;
@@ -971,164 +971,164 @@ int SG_gateway_init_opts( struct SG_gateway* gateway, struct md_opts* opts ) {
 
       // initialize peer
       SG_debug("%s", "Not anonymous; initializing as peer\n");
-      
+
       rc = md_init( conf, ms, opts );
       if( rc != 0 ) {
-         
+
          goto SG_gateway_init_error;
       }
    }
    else {
-      
+
       // initialize client
       SG_debug("%s", "Anonymous; initializing as client\n");
-      
+
       rc = md_init_client( conf, ms, opts );
       if( rc != 0 ) {
-         
+
          goto SG_gateway_init_error;
       }
    }
-   
+
    // advance!
    md_inited = true;
    ms_inited = true;
-   
-   // initialize config reload 
+
+   // initialize config reload
    sem_init( &config_sem, 0, 0 );
    sem_init( &config_finished_sem, 0, 0 );
    pthread_mutex_init( &num_config_reload_waiters_lock, NULL );
-   
+
    // advance!
    config_inited = true;
-   
-   // initialize workqueues 
+
+   // initialize workqueues
    for( num_iowqs = 0; num_iowqs < max_num_iowqs; num_iowqs++ ) {
-      
+
       rc = md_wq_init( &iowqs[num_iowqs], gateway );
       if( rc != 0 ) {
-         
+
          SG_error("md_wq_init( iowq[%d] ) rc = %d\n", num_iowqs, rc );
-         
+
          goto SG_gateway_init_error;
       }
    }
-   
-   // get block size, now that the MS client is initialized 
+
+   // get block size, now that the MS client is initialized
    block_size = ms_client_get_volume_blocksize( ms );
-   
+
    // initialize cache
    rc = md_cache_init( cache, conf, conf->cache_size_limit / block_size );
    if( rc != 0 ) {
-      
+
       SG_error("md_cache_init rc = %d\n", rc );
-   
+
       goto SG_gateway_init_error;
    }
-   
+
    // advance!
    cache_inited = true;
-   
+
    // if we're a peer, initialize HTTP server, making the gateway available to connections
    if( !conf->is_client ) {
-         
-      rc = md_HTTP_init( http, MD_HTTP_TYPE_STATEMACHINE | MHD_USE_EPOLL_INTERNALLY_LINUX_ONLY | MHD_USE_DEBUG, gateway );
+
+      rc = md_HTTP_init( http, MD_HTTP_TYPE_STATEMACHINE | MHD_USE_EPOLL_INTERNALLY_LINUX_ONLY, gateway );
       if( rc != 0 ) {
-         
+
          SG_error("md_HTTP_init rc = %d\n", rc );
-         
+
          goto SG_gateway_init_error;
       }
-     
+
       md_HTTP_set_limits( http, block_size * SG_MAX_BLOCK_LEN_MULTIPLIER, 100 * block_size * SG_MAX_BLOCK_LEN_MULTIPLIER );
 
-      // set up HTTP server methods 
+      // set up HTTP server methods
       SG_server_HTTP_install_handlers( http );
 
       // advance!
       http_inited = true;
    }
    else {
-      
-      // won't need the HTTP server 
+
+      // won't need the HTTP server
       SG_safe_free( http );
    }
-    
-   // load driver 
+
+   // load driver
    if( !opts->ignore_driver ) {
-      
+
       rc = SG_gateway_driver_init_internal( ms, conf, driver, opts->num_instances );
       if( rc != 0 && rc != -ENOENT ) {
-         
+
          SG_error("SG_gateway_driver_init_internal rc = %d\n", rc );
-         
+
          goto SG_gateway_init_error;
       }
-      
-      // advance 
+
+      // advance
       driver_inited = true;
    }
-   
-   // set up the downloader 
+
+   // set up the downloader
    rc = md_downloader_init( dl, "gateway" );
    if( rc != 0 ) {
-      
+
       SG_error("md_downloader_init('gateway') rc = %d\n", rc );
-      
+
       goto SG_gateway_init_error;
    }
-   
+
    // advance!
    dl_inited = true;
-   
-   // start workqueues 
+
+   // start workqueues
    for( int i = 0; i < num_iowqs; i++ ) {
-      
+
       rc = md_wq_start( &iowqs[i] );
       if( rc != 0 ) {
-         
+
          SG_error("md_wq_start( iowqs[%d] ) rc = %d\n", i, rc );
-         
+
          goto SG_gateway_init_error;
       }
    }
-   
-   // clear cache 
+
+   // clear cache
    SG_debug("Clearing old gateway cache state in '%s'\n", conf->data_root );
    md_cache_evict_staging( cache );
 
-   // start cache 
+   // start cache
    rc = md_cache_start( cache );
    if( rc != 0 ) {
-      
+
       SG_error("md_cache_start rc = %d\n", rc );
-      
+
       goto SG_gateway_init_error;
    }
-   
-   // start downloader 
+
+   // start downloader
    rc = md_downloader_start( dl );
    if( rc != 0 ) {
-      
+
       SG_error("md_downloader_start rc = %d\n", rc );
-      
+
       goto SG_gateway_init_error;
    }
-   
-   // don't die on SIGPIPE 
+
+   // don't die on SIGPIPE
    signal( SIGPIPE, SIG_IGN );
 
    // start driver
-   if( driver_inited ) { 
+   if( driver_inited ) {
 
-      rc = SG_driver_procs_start( driver ); 
+      rc = SG_driver_procs_start( driver );
       if( rc != 0 ) {
 
          SG_error("SG_driver_procs_start('%s') rc = %d\n", opts->driver_exec_str, rc );
          goto SG_gateway_init_error;
       }
    }
-   
+
    // initialize gateway runtime, so we can start HTTP and get certificates
    gateway->ms = ms;
    gateway->conf = conf;
@@ -1145,110 +1145,110 @@ int SG_gateway_init_opts( struct SG_gateway* gateway, struct md_opts* opts ) {
    gateway->first_arg_optind = first_arg_optind;
    gateway->foreground = opts->foreground;
    gateway->use_signal_handlers = true;
-   
+
    if( gateway->http != NULL ) {
-      
-      // start HTTP server 
+
+      // start HTTP server
       rc = md_HTTP_start( gateway->http, ms_client_get_portnum( ms ) );
       if( rc != 0 ) {
-         
+
          SG_error("md_HTTP_start rc = %d\n", rc );
-         
+
          goto SG_gateway_init_error;
       }
    }
-   
+
    // success!
    gateway->running = true;
-   
+
    // initialize gateway-specific bits
    if( gateway->impl_setup != NULL ) {
-      
+
       rc = (*gateway->impl_setup)( gateway, &gateway->cls );
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_setup rc = %d\n", rc );
-         
+
          gateway->running = false;
          memset( gateway, 0, sizeof(struct SG_gateway) );
-         
+
          goto SG_gateway_init_error;
       }
    }
 
    return rc;
-   
+
    // error handler
-SG_gateway_init_error:   
-   
+SG_gateway_init_error:
+
    if( dl_inited ) {
-      
+
       if( md_downloader_is_running( dl ) ) {
          md_downloader_stop( dl );
       }
-      
+
       md_downloader_shutdown( dl );
    }
-   
+
    SG_safe_free( dl );
-   
+
    if( http_inited ) {
-      
+
       if( http->running ) {
          md_HTTP_stop( http );
       }
-      
+
       md_HTTP_free( http );
    }
-   
+
    SG_safe_free( http );
-   
+
    if( cache_inited ) {
-      
+
       if( md_cache_is_running( cache ) ) {
          md_cache_stop( cache );
       }
-      
+
       md_cache_destroy( cache );
    }
-   
+
    SG_safe_free( cache );
-   
+
    if( driver_inited ) {
       SG_driver_shutdown( driver );
    }
-   
+
    SG_safe_free( driver );
-   
+
    if( config_inited ) {
       sem_destroy( &config_sem );
       sem_destroy( &config_finished_sem );
       pthread_mutex_destroy( &num_config_reload_waiters_lock );
    }
-   
+
    if( ms_inited ) {
       ms_client_destroy( ms );
    }
-   
+
    if( iowqs != NULL ) {
       for( int i = 0; i < num_iowqs; i++ ) {
-        
+
           md_wq_stop( &iowqs[i] );
           md_wq_free( &iowqs[i], NULL );
       }
-      
+
       SG_safe_free( iowqs );
    }
-   
+
    SG_safe_free( ms );
-   
+
    md_free_conf( conf );
    SG_safe_free( conf );
-   
+
    if( md_inited ) {
       md_shutdown();
    }
-   
+
    return rc;
 }
 
@@ -1260,64 +1260,64 @@ SG_gateway_init_error:
  * Loads and initializes the driver, starts up the cache, reloads the certificates, starts up the HTTP server, starts up the download infrastructure
  * @retval 0 Success
  * @retval -ENOMEM Out of Memory
- * @retval -ENOENT File was not found 
+ * @retval -ENOENT File was not found
  * @retval <0 libsyndicate fails to initialize
  * @retval 1 The user wanted help
  */
 int SG_gateway_init( struct SG_gateway* gateway, uint64_t gateway_type, int argc, char** argv, struct md_opts* overrides ) {
-   
+
    int rc = 0;
    struct md_opts opts;
    int first_arg_optind = 0;
-    
+
    rc = md_opts_default( &opts );
    if( rc != 0 ) {
        // OOM
        return rc;
    }
-   
+
    // get options
    rc = md_opts_parse( &opts, argc, argv, &first_arg_optind, NULL, NULL );
    if( rc != 0 ) {
-      
+
       if( rc < 0 ) {
-            
+
          SG_error( "md_opts_parse rc = %d\n", rc );
       }
-      
+
       return rc;
    }
-   
+
    // become process group leader, so we can talk to all processes
-   // started by the driver and other infrastructure 
+   // started by the driver and other infrastructure
    rc = setpgrp();
    if( rc != 0 ) {
-      
+
       rc = -errno;
       SG_error("setpgrp rc = %d\n", rc );
       return rc;
    }
-   
+
    md_opts_set_gateway_type( &opts, md_opts_get_gateway_type( overrides ) );
    md_opts_set_ignore_driver( &opts, md_opts_get_ignore_driver( overrides ) );
    md_opts_set_driver_config( &opts, overrides->driver_exec_str, overrides->driver_roles, overrides->num_instances, overrides->num_driver_roles );
-   
-   // initialize the gateway 
+
+   // initialize the gateway
    rc = SG_gateway_init_opts( gateway, &opts );
-   
+
    md_opts_free( &opts );
-   
+
    if( rc == 0 ) {
-      
+
       gateway->first_arg_optind = first_arg_optind;
    }
-   
+
    return rc;
 }
 
 
 /**
- * @brief Set the gateway's client-given state 
+ * @brief Set the gateway's client-given state
  * @note Always succeeds
  */
 void SG_gateway_set_cls( struct SG_gateway* gateway, void* cls ) {
@@ -1326,70 +1326,70 @@ void SG_gateway_set_cls( struct SG_gateway* gateway, void* cls ) {
 
 
 /**
- * @brief Signal the main loop to exit 
+ * @brief Signal the main loop to exit
  * @note Always succeeds
  */
 int SG_gateway_signal_main( struct SG_gateway* gateway ) {
- 
-   SG_debug("%s", "signaled\n");  
+
+   SG_debug("%s", "signaled\n");
    gateway->running = false;
    sem_post( &gateway->config_sem );
-   
+
    return 0;
 }
 
 
 /**
- * @brief Shut the gateway down 
+ * @brief Shut the gateway down
  * @retval 0 Success
  * @retval -EINVAL The gateway was already stopped
  */
 int SG_gateway_shutdown( struct SG_gateway* gateway ) {
-   
+
    gateway->running = false;
-   
-   // do the gateway shutdown 
+
+   // do the gateway shutdown
    if( gateway->impl_shutdown != NULL ) {
-      
+
       (*gateway->impl_shutdown)( gateway, gateway->cls );
    }
-  
-   if( gateway->dl != NULL ) { 
+
+   if( gateway->dl != NULL ) {
        md_downloader_stop( gateway->dl );
        md_downloader_shutdown( gateway->dl );
        SG_safe_free( gateway->dl );
    }
-      
+
    if( gateway->http != NULL ) {
       md_HTTP_stop( gateway->http );
       md_HTTP_free( gateway->http );
       SG_safe_free( gateway->http );
    }
-   
+
    if( gateway->cache != NULL ) {
        md_cache_flush( gateway->cache );
        md_cache_stop( gateway->cache );
        md_cache_destroy( gateway->cache );
        SG_safe_free( gateway->cache );
    }
-   
+
    if( gateway->driver != NULL ) {
       SG_driver_shutdown( gateway->driver );
       SG_safe_free( gateway->driver );
    }
-   
+
    if( gateway->ms != NULL ) {
        ms_client_destroy( gateway->ms );
        SG_safe_free( gateway->ms );
    }
-   
+
    if( gateway->iowqs != NULL ) {
        for( int i = 0; i < gateway->num_iowqs; i++ ) {
-      
+
           md_wq_stop( &gateway->iowqs[i] );
           md_wq_free( &gateway->iowqs[i], NULL );
        }
-   
+
        SG_safe_free( gateway->iowqs );
    }
 
@@ -1401,11 +1401,11 @@ int SG_gateway_shutdown( struct SG_gateway* gateway ) {
    sem_destroy( &gateway->config_sem );
    sem_destroy( &gateway->config_finished_sem );
    pthread_mutex_destroy( &gateway->num_config_reload_waiters_lock );
-   
+
    memset( gateway, 0, sizeof(struct SG_gateway) );
-   
+
    md_shutdown();
-   
+
    return 0;
 }
 
@@ -1417,7 +1417,7 @@ int SG_gateway_shutdown( struct SG_gateway* gateway ) {
  * @note Always succeeds
  */
 static void SG_gateway_term( int signum, siginfo_t* siginfo, void* context ) {
-   
+
    SG_gateway_signal_main( g_main_gateway );
 }
 
@@ -1432,7 +1432,7 @@ static void SG_gateway_wakeup_config_waiters( struct SG_gateway* gateway, int re
    uint64_t num_waiters = 0;
 
    pthread_mutex_lock( &gateway->num_config_reload_waiters_lock );
-   
+
    num_waiters = gateway->num_config_reload_waiters;
    gateway->num_config_reload_waiters = 0;
 
@@ -1469,12 +1469,12 @@ int SG_gateway_use_signal_handlers( struct SG_gateway* gateway, bool val ) {
  * @retval 0 Success
  */
 int SG_gateway_main( struct SG_gateway* gateway ) {
-   
+
    int rc = 0;
-   
-   // we're running main for this gateway 
+
+   // we're running main for this gateway
    g_main_gateway = gateway;
-   
+
    // set up signal handlers, so we can shut ourselves down
    // (unless asked not to)
    if( gateway->use_signal_handlers ) {
@@ -1483,27 +1483,27 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
 
       struct sigaction sigact;
       memset( &sigact, 0, sizeof(struct sigaction) );
-      
+
       sigemptyset( &sigact.sa_mask );
       sigact.sa_sigaction = SG_gateway_term;
-      
+
       // use sa_sigaction, not sa_handler
       sigact.sa_flags = SA_SIGINFO;
-      
-      // handle the usual terminal cases 
+
+      // handle the usual terminal cases
       sigaction( SIGQUIT, &sigact, NULL );
       sigaction( SIGTERM, &sigact, NULL );
       sigaction( SIGINT, &sigact, NULL );
    }
-   
+
    SG_debug("%s", "Entering main loop\n");
-   
+
    while( gateway->running ) {
 
       struct timespec now;
       struct timespec reload_deadline;
       struct ms_volume* old_volume = NULL;
-      
+
       ms::ms_user_cert user_cert;
       ms::ms_user_cert volume_owner_cert;
       ms_cert_bundle* gateway_certs = NULL;
@@ -1511,7 +1511,7 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
       ms::ms_volume_metadata* volume_cert = NULL;
       EVP_PKEY* syndicate_pubkey = NULL;
       EVP_PKEY* old_syndicate_pubkey = NULL;
-      
+
       struct md_syndicate_conf* conf = SG_gateway_conf( gateway );
       struct ms_client* ms = SG_gateway_ms( gateway );
 
@@ -1523,37 +1523,37 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
       struct ms_gateway_cert* new_gateway_cert = NULL;
       char* new_driver_text = NULL;
       size_t new_driver_text_len = 0;
-      
+
       clock_gettime( CLOCK_REALTIME, &now );
-      
+
       reload_deadline.tv_sec = now.tv_sec + conf->config_reload_freq;
       reload_deadline.tv_nsec = 0;
-      
+
       if( reload_deadline.tv_sec == now.tv_sec ) {
-         
+
          // avoid flapping
          SG_warn("%s", "Waiting for manditory 1 second between volume reload checks\n");
          reload_deadline.tv_sec ++;
       }
-      
+
       SG_info("Next reload at %ld (in %ld seconds)\n", reload_deadline.tv_sec, reload_deadline.tv_sec - now.tv_sec );
-      
-      // wait to be signaled to reload 
+
+      // wait to be signaled to reload
       while( reload_deadline.tv_sec > now.tv_sec ) {
-         
+
          clock_gettime( CLOCK_REALTIME, &now );
-         
+
          rc = sem_timedwait( &gateway->config_sem, &reload_deadline );
-         
+
          // signaled to die?
          if( !gateway->running ) {
             rc = 0;
             break;
          }
-         
+
          if( rc != 0 ) {
             rc = -errno;
-            
+
             if( rc == -EINTR ) {
                continue;
             }
@@ -1566,18 +1566,18 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
             }
          }
          else {
-            // got woken up 
+            // got woken up
             break;
          }
       }
-      
+
       // signaled to die?
       if( !gateway->running ) {
          SG_debug("%s", "Gateway died, exiting...\n");
          break;
       }
 
-      // find old cert 
+      // find old cert
       old_gateway_cert = ms_client_get_gateway_cert( ms, conf->gateway );
       if( old_gateway_cert == NULL ) {
          SG_error("BUG: no gateway on file for us (%" PRIu64 ")\n", conf->gateway );
@@ -1585,34 +1585,34 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
          break;
       }
 
-      // find old driver hash 
+      // find old driver hash
       rc = ms_client_gateway_driver_hash_buf( old_gateway_cert, old_driver_hash );
       if( rc == -ENOENT ) {
          rc = 0;
          memset( old_driver_hash, 0, SHA256_DIGEST_LENGTH );
       }
-      
-      // fetch new certs 
+
+      // fetch new certs
       volume_cert = SG_safe_new( ms::ms_volume_metadata );
       if( volume_cert == NULL ) {
          rc = -ENOMEM;
          break;
       }
-      
+
       gateway_certs = SG_safe_new( ms_cert_bundle );
       if( gateway_certs == NULL ) {
-         
+
          SG_safe_delete( volume_cert );
          rc = -ENOMEM;
          break;
       }
-     
+
       SG_debug("%s", "Reloading certificates\n");
       rc = md_certs_reload( conf, &syndicate_pubkey, &user_cert, &volume_owner_cert, volume_cert, gateway_certs );
       if( rc != 0 ) {
-         
+
          SG_error("md_certs_reload rc = %d\n", rc );
-         
+
          ms_client_cert_bundle_free( gateway_certs );
          SG_safe_delete( gateway_certs );
          SG_safe_delete( volume_cert );
@@ -1620,39 +1620,39 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
             EVP_PKEY_free( syndicate_pubkey );
             syndicate_pubkey = NULL;
          }
-         
+
          SG_gateway_wakeup_config_waiters( gateway, rc );
          rc = 0;
          continue;
       }
-      
-      // install new syndicate pubkey 
+
+      // install new syndicate pubkey
       old_syndicate_pubkey = ms_client_swap_syndicate_pubkey( ms, syndicate_pubkey );
       if( old_syndicate_pubkey != NULL ) {
-          
+
          EVP_PKEY_free( old_syndicate_pubkey );
       }
-      
+
       // install new volume state
       old_volume = ms_client_swap_volume_cert( ms, volume_cert );
       if( old_volume != NULL ) {
-         
+
          ms_client_volume_free( old_volume );
          SG_safe_free( old_volume );
       }
-      
+
       // install new certs
       old_gateway_certs = ms_client_swap_gateway_certs( ms, gateway_certs );
       if( old_gateway_certs != NULL ) {
-         
+
          ms_client_cert_bundle_free( old_gateway_certs );
          SG_safe_delete( old_gateway_certs );
       }
-     
+
       // go fetch or revalidate our new driver, if it changed
       new_gateway_cert = md_gateway_cert_find( gateway_certs, conf->gateway );
       if( new_gateway_cert == NULL ) {
-      
+
          SG_error("No cert on file for us (%" PRIu64 ")\n", conf->gateway );
          rc = -ENOTCONN;
          break;
@@ -1677,22 +1677,22 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
       sha256_printable_buf( old_driver_hash, old_driver_hash_str );
       sha256_printable_buf( new_driver_hash, new_driver_hash_str );
       SG_debug("Driver changed from %s to %s; reloading\n", old_driver_hash_str, new_driver_hash_str );
-      
+
       // driver changed. go re-download
       rc = md_driver_reload( conf, new_gateway_cert );
       if( rc != 0 && rc != -ENOENT ) {
-      
+
          SG_error("md_driver_reload rc = %d\n", rc );
          rc = -ENOTCONN;
          break;
       }
-      
+
       rc = ms_client_gateway_get_driver_text( ms, &new_driver_text, &new_driver_text_len );
       if( rc != 0 ) {
          SG_error("ms_client_gateway_get_driver_text rc = %d\n", rc );
       }
       if( rc == -ENOMEM ) {
-         // have a driver, but couldn't get to it 
+         // have a driver, but couldn't get to it
          break;
       }
 
@@ -1700,33 +1700,33 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
 
          // reload workers
          rc = SG_driver_reload( SG_gateway_driver( gateway ), ms_client_my_pubkey( ms ), ms_client_my_privkey( ms ), new_driver_text, new_driver_text_len );
-         SG_safe_free( new_driver_text ); 
+         SG_safe_free( new_driver_text );
          if( gateway->impl_config_change != NULL ) {
-         
-            // gateway-specific config reload 
+
+            // gateway-specific config reload
             rc = (*gateway->impl_config_change)( gateway, rc, gateway->cls );
             if( rc != 0 ) {
-            
+
                SG_warn( "gateway->impl_config_change rc = %d\n", rc );
             }
          }
       }
-     
+
       if( rc != 0 ) {
 
          // failed to load the driver
          // default behavior is to abort
-         SG_error("FATAL: aborting on failure to reload the driver (rc = %d)\n", rc ); 
+         SG_error("FATAL: aborting on failure to reload the driver (rc = %d)\n", rc );
          break;
       }
-     
+
       rc = 0;
       SG_debug("Reloaded at %ld.%ld\n", reload_deadline.tv_sec, reload_deadline.tv_nsec );
       SG_gateway_wakeup_config_waiters( gateway, 0 );
    }
 
    SG_debug("Leaving main loop, rc = %d\n", rc);
-   
+
    return rc;
 }
 
@@ -1734,9 +1734,9 @@ int SG_gateway_main( struct SG_gateway* gateway ) {
 /**
  * @brief Begin to reload gateway, wake up the main loop
  * @retval 0
- */ 
+ */
 int SG_gateway_start_reload( struct SG_gateway* gateway ) {
-   
+
    sem_post( &gateway->config_sem );
    return 0;
 }
@@ -1744,13 +1744,13 @@ int SG_gateway_start_reload( struct SG_gateway* gateway ) {
 /**
  * @brief Wait for the reload to be done
  * @retval 0
- */ 
+ */
 int SG_gateway_wait_reload( struct SG_gateway* gateway, int* mbox ) {
-   
+
    int** new_mboxes = NULL;
 
    pthread_mutex_lock( &gateway->num_config_reload_waiters_lock );
-   
+
    new_mboxes = SG_CALLOC( int*, gateway->num_config_reload_waiters + 1 );
    if( new_mboxes == NULL ) {
       pthread_mutex_unlock( &gateway->num_config_reload_waiters_lock );
@@ -1776,7 +1776,7 @@ int SG_gateway_wait_reload( struct SG_gateway* gateway, int* mbox ) {
 
 /**
  * @brief Set the gateway implementation setup routine
- */ 
+ */
 void SG_impl_setup( struct SG_gateway* gateway, int (*impl_setup)( struct SG_gateway*, void** ) ) {
    gateway->impl_setup = impl_setup;
 }
@@ -1790,7 +1790,7 @@ void SG_impl_shutdown( struct SG_gateway* gateway, void (*impl_shutdown)( struct
 
 /**
  * @brief Set the gateway implementation connect_cache routine
- */ 
+ */
 void SG_impl_connect_cache( struct SG_gateway* gateway, int (*impl_connect_cache)( struct SG_gateway*, CURL*, char const*, void* ) ) {
    gateway->impl_connect_cache = impl_connect_cache;
 }
@@ -1804,14 +1804,14 @@ void SG_impl_stat( struct SG_gateway* gateway, int (*impl_stat)( struct SG_gatew
 
 /**
  * @brief Set the gateway implementation stat-block routine
- */ 
+ */
 void SG_impl_stat_block( struct SG_gateway* gateway, int (*impl_stat_block)( struct SG_gateway*, struct SG_request_data*, struct SG_request_data*, mode_t*, void* ) ) {
    gateway->impl_stat_block = impl_stat_block;
 }
 
 /**
  * @brief Set the gateway implementation truncate routine
- */ 
+ */
 void SG_impl_truncate( struct SG_gateway* gateway, int (*impl_truncate)( struct SG_gateway*, struct SG_request_data*, uint64_t, void* ) ) {
    gateway->impl_truncate = impl_truncate;
 }
@@ -1825,14 +1825,14 @@ void SG_impl_rename( struct SG_gateway* gateway, int (*impl_rename)( struct SG_g
 
 /**
  * @brief Set the gateway implementation rename routine
- */ 
+ */
 void SG_impl_rename_hint( struct SG_gateway* gateway, int (*impl_rename_hint)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, char const*, void* ) ) {
    gateway->impl_rename_hint = impl_rename_hint;
 }
 
 /**
  * @brief Set the gateway implementation detach routine
- */ 
+ */
 void SG_impl_detach( struct SG_gateway* gateway, int (*impl_detach)( struct SG_gateway*, struct SG_request_data*, void* ) ) {
    gateway->impl_detach = impl_detach;
 }
@@ -1846,28 +1846,28 @@ void SG_impl_refresh( struct SG_gateway* gateway, int (*impl_refresh)( struct SG
 
 /**
  * @brief Set the gateway implementation to serialize a chunk
- */ 
+ */
 void SG_impl_serialize( struct SG_gateway* gateway, int (*impl_serialize)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, struct SG_chunk*, void* ) ) {
    gateway->impl_serialize = impl_serialize;
 }
 
 /**
  * @brief Set the gateway implementation to deserialize a chunk
- */ 
+ */
 void SG_impl_deserialize( struct SG_gateway* gateway, int (*impl_deserialize)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, struct SG_chunk*, void* ) ) {
    gateway->impl_deserialize = impl_deserialize;
 }
 
 /**
  * @brief Set the gateway implementation get_block routine
- */ 
+ */
 void SG_impl_get_block( struct SG_gateway* gateway, int (*impl_get_block)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, uint64_t, void* ) ) {
    gateway->impl_get_block = impl_get_block;
 }
 
 /**
  * @brief Set the gateway implementation put_block routine
- */ 
+ */
 void SG_impl_put_block( struct SG_gateway* gateway, int (*impl_put_block)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, uint64_t, void* ) ) {
    gateway->impl_put_block = impl_put_block;
 }
@@ -1909,70 +1909,70 @@ void SG_impl_delete_manifest( struct SG_gateway* gateway, int (*impl_delete_mani
 
 /**
  * @brief Set the gateway implementation getxattr routine
- */ 
+ */
 void SG_impl_getxattr( struct SG_gateway* gateway, int (*impl_getxattr)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, void* ) ) {
    gateway->impl_getxattr = impl_getxattr;
 }
 
 /**
  * @brief Set the gateway implementation listxattr routine
- */ 
+ */
 void SG_impl_listxattr( struct SG_gateway* gateway, int (*impl_listxattr)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk**, size_t*, void* ) ) {
    gateway->impl_listxattr = impl_listxattr;
 }
 
 /**
  * @brief Set the gateway implementation setxattr routine
- */ 
+ */
 void SG_impl_setxattr( struct SG_gateway* gateway, int (*impl_setxattr)( struct SG_gateway*, struct SG_request_data*, struct SG_chunk*, void* ) ) {
    gateway->impl_setxattr = impl_setxattr;
 }
 
 /**
  * @brief Set the gateway implementatio removexattr routine
- */ 
+ */
 void SG_impl_removexattr( struct SG_gateway* gateway, int (*impl_removexattr)( struct SG_gateway*, struct SG_request_data*, void* ) ) {
    gateway->impl_removexattr = impl_removexattr;
 }
 
 /**
  * @brief Set the gateway implementation config_change routine
- */ 
+ */
 void SG_impl_config_change( struct SG_gateway* gateway, int (*impl_config_change)( struct SG_gateway*, int, void* ) ) {
    gateway->impl_config_change = impl_config_change;
 }
 
 /**
- * @brief Get the gateway's gatewa-specific driver 
- */ 
+ * @brief Get the gateway's gatewa-specific driver
+ */
 void* SG_gateway_cls( struct SG_gateway* gateway ) {
    return gateway->cls;
 }
 
 /**
- * @brief Get the gateway's config 
- */ 
+ * @brief Get the gateway's config
+ */
 struct md_syndicate_conf* SG_gateway_conf( struct SG_gateway* gateway ) {
    return gateway->conf;
 }
 
 /**
  * @brief Get the gateway's driver
- */ 
+ */
 struct SG_driver* SG_gateway_driver( struct SG_gateway* gateway ) {
    return gateway->driver;
 }
 
 /**
  * @brief Get the gateway's MS client
- */ 
+ */
 struct ms_client* SG_gateway_ms( struct SG_gateway* gateway ) {
    return gateway->ms;
 }
 
 /**
  * @brief Get the gateway's cache
- */ 
+ */
 struct md_syndicate_cache* SG_gateway_cache( struct SG_gateway* gateway ) {
    return gateway->cache;
 }
@@ -1986,7 +1986,7 @@ struct md_HTTP* SG_gateway_HTTP( struct SG_gateway* gateway ) {
 
 /**
  * @brief Get the gateway's downloader
- */ 
+ */
 struct md_downloader* SG_gateway_dl( struct SG_gateway* gateway ) {
    return gateway->dl;
 }
@@ -2000,7 +2000,7 @@ bool SG_gateway_running( struct SG_gateway* gateway ) {
 
 /**
  * @brief Get gateway ID
- */ 
+ */
 uint64_t SG_gateway_id( struct SG_gateway* gateway ) {
    return gateway->ms->gateway_id;
 }
@@ -2014,14 +2014,14 @@ uint64_t SG_gateway_user_id( struct SG_gateway* gateway ) {
 
 /**
  * @brief Get gateway private key
- */ 
+ */
 EVP_PKEY* SG_gateway_private_key( struct SG_gateway* gateway ) {
    return gateway->ms->gateway_key;
 }
 
 /**
  * @brief Get gateway public key
- */ 
+ */
 EVP_PKEY* SG_gateway_public_key( struct SG_gateway* gateway ) {
    return gateway->ms->gateway_pubkey;
 }
@@ -2053,21 +2053,21 @@ void SG_chunk_init( struct SG_chunk* chunk, char* data, off_t len ) {
 /**
  * @brief Duplicate a chunk
  *
- * If dest's data is already allocated, try to expand it. 
- * either way, set dest->len to the required size 
- * @retval 0 Success 
+ * If dest's data is already allocated, try to expand it.
+ * either way, set dest->len to the required size
+ * @retval 0 Success
  * @retval -ENOMEM Out of Memory
  */
 int SG_chunk_dup( struct SG_chunk* dest, struct SG_chunk* src ) {
-  
+
    dest->data = SG_CALLOC( char, src->len );
    if( dest->data == NULL ) {
       return -ENOMEM;
    }
-   
+
    dest->len = src->len;
    memcpy( dest->data, src->data, src->len );
-   
+
    return 0;
 }
 
@@ -2099,19 +2099,19 @@ int SG_chunk_copy_or_dup( struct SG_chunk* dest, struct SG_chunk* src ) {
 
 
 /**
- * @brief Copy one chunk's data to another 
+ * @brief Copy one chunk's data to another
  * @retval 0 Success
  * @retval -EINVAL Dest isn't big enough
  */
 int SG_chunk_copy( struct SG_chunk* dest, struct SG_chunk* src ) {
-   
+
    if( dest->len < src->len ) {
       return -EINVAL;
    }
-   
+
    memcpy( dest->data, src->data, src->len );
    dest->len = src->len;
-   
+
    return 0;
 }
 
@@ -2124,24 +2124,24 @@ void SG_chunk_free( struct SG_chunk* chunk ) {
 }
 
 /**
- * @brief Fetch a block or serialized manifest from the on-disk cache 
+ * @brief Fetch a block or serialized manifest from the on-disk cache
  * @retval 0 Success, and set *buf and *buf_len to the contents of the cached chunk
- * @retval -ENOENT Not found 
- * @retval -ENOMEM Out of Memory 
+ * @retval -ENOENT Not found
+ * @retval -ENOMEM Out of Memory
  * @retval -errno Failed to read
- */ 
+ */
 static int SG_gateway_cache_get_raw( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t block_id_or_manifest_mtime_sec, int64_t block_version_or_manifest_mtime_nsec, struct SG_chunk* chunk ) {
-   
+
    char* chunk_buf = NULL;
    ssize_t chunk_len = 0;
    int block_fd = 0;
-   
+
    // stored on disk?
    block_fd = md_cache_open_block( gateway->cache, reqdat->file_id, reqdat->file_version, block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, O_RDONLY, 0 );
-   
+
    if( block_fd < 0 ) {
-     
-      if( block_fd == -ENOENT ) { 
+
+      if( block_fd == -ENOENT ) {
           SG_debug("md_cache_open_block( %" PRIX64 ".%" PRId64 "[%s %" PRIu64 ".%" PRId64 "] (%s) ) rc = %d\n",
                   reqdat->file_id, reqdat->file_version, SG_request_is_block( reqdat ) ? "block" : "manifest", block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, reqdat->fs_path, block_fd );
       }
@@ -2152,31 +2152,31 @@ static int SG_gateway_cache_get_raw( struct SG_gateway* gateway, struct SG_reque
 
       return block_fd;
    }
-   
+
    // chunk opened.
-   // read it 
+   // read it
    chunk_len = md_cache_read_block( block_fd, &chunk_buf );
    if( chunk_len < 0 ) {
-      
+
       SG_error("md_cache_read_block( %" PRIX64 ".%" PRId64 "[%s %" PRIu64 ".%" PRId64 "] (%s) ) rc = %d\n",
                reqdat->file_id, reqdat->file_version, SG_request_is_block( reqdat ) ? "block" : "manifest", block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, reqdat->fs_path, (int)chunk_len );
-      
+
       return (int)chunk_len;
    }
-   
+
    close( block_fd );
-   
+
    // success! promote!
    md_cache_promote_block( gateway->cache, reqdat->file_id, reqdat->file_version, block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec );
-    
+
    // for debugging...
    char prefix[21];
    memset( prefix, 0, 21 );
    memcpy( prefix, chunk_buf, MIN( 20, chunk_len ) );
-   
+
    SG_debug("CACHE HIT on %" PRIX64 ".%" PRId64 "[%s %" PRIu64 ".%" PRId64 "] (%s) %zu bytes, data: '%s'...\n",
             reqdat->file_id, reqdat->file_version, SG_request_is_block( reqdat ) ? "block" : "manifest", block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, reqdat->fs_path, chunk_len, prefix );
-   
+
    SG_chunk_init( chunk, chunk_buf, chunk_len );
    return 0;
 }
@@ -2192,37 +2192,37 @@ static int SG_gateway_cache_get_raw( struct SG_gateway* gateway, struct SG_reque
  */
 static int SG_gateway_cache_put_raw_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t block_id_or_manifest_mtime_sec, int64_t block_version_or_manifest_mtime_nsec,
                                            struct SG_chunk* chunk, uint64_t cache_flags, struct md_cache_block_future** cache_fut ) {
-   
+
    int rc = 0;
    struct md_cache_block_future* f = NULL;
 
-   // sanity check 
+   // sanity check
    if( cache_fut == NULL && !(cache_flags & SG_CACHE_FLAG_DETACHED)) {
       SG_error("BUG: cache_flags = %" PRIX64 ", but no future given\n", cache_flags);
       return -EINVAL;
-   } 
-   
+   }
+
    // cache the new chunk.  Get back the future (caller will manage it).
    f = md_cache_write_block_async( gateway->cache, reqdat->file_id, reqdat->file_version, block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, chunk->data, chunk->len, cache_flags, &rc );
-   
+
    if( f == NULL ) {
-      
+
       SG_error("md_cache_write_block_async( %" PRIX64 ".%" PRId64 "[%s %" PRIu64 ".%" PRId64 "] (%s) ) rc = %d\n",
                reqdat->file_id, reqdat->file_version, (SG_request_is_block( reqdat ) ? "block" : "manifest"), block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, reqdat->fs_path, rc );
-               
+
       return rc;
    }
-   
+
    // for debugging...
    char prefix[21];
    memset( prefix, 0, 21 );
    memcpy( prefix, chunk->data, MIN( 20, chunk->len ) );
-   
+
    if( cache_flags & SG_CACHE_FLAG_MANAGED ) {
        SG_debug("STAGING PUT %" PRIX64 ".%" PRId64 "[%s %" PRIu64 ".%" PRId64 "] (%s) %zu bytes, data: '%s'...\n",
                reqdat->file_id, reqdat->file_version, (SG_request_is_block( reqdat ) ? "block" : "manifest"), block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, reqdat->fs_path, chunk->len, prefix );
    }
-   else { 
+   else {
        SG_debug("CACHE PUT %" PRIX64 ".%" PRId64 "[%s %" PRIu64 ".%" PRId64 "] (%s) %zu bytes, data: '%s'...\n",
                reqdat->file_id, reqdat->file_version, (SG_request_is_block( reqdat ) ? "block" : "manifest"), block_id_or_manifest_mtime_sec, block_version_or_manifest_mtime_nsec, reqdat->fs_path, chunk->len, prefix );
    }
@@ -2230,7 +2230,7 @@ static int SG_gateway_cache_put_raw_async( struct SG_gateway* gateway, struct SG
    if( cache_fut != NULL ) {
        *cache_fut = f;
    }
-   
+
    return rc;
 }
 
@@ -2244,54 +2244,54 @@ static int SG_gateway_cache_put_raw_async( struct SG_gateway* gateway, struct SG
  * @retval <0 Error
  */
 int SG_gateway_cached_block_get_raw( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* chunk ) {
-   
+
    int rc = 0;
-   
-   // sanity check 
+
+   // sanity check
    if( !SG_request_is_block( reqdat ) ) {
       return -EINVAL;
    }
-   
-   // lookaside: if this block is being written, then we can't read it 
+
+   // lookaside: if this block is being written, then we can't read it
    rc = md_cache_is_block_readable( gateway->cache, reqdat->file_id, reqdat->file_version, reqdat->block_id, reqdat->block_version );
    if( rc == -EAGAIN ) {
-      
-      // not available in the cache 
+
+      // not available in the cache
       return -ENOENT;
    }
-   
-   // check cache 
+
+   // check cache
    rc = SG_gateway_cache_get_raw( gateway, reqdat, reqdat->block_id, reqdat->block_version, chunk );
    if( rc != 0 ) {
-      
-      // not available in the cache 
+
+      // not available in the cache
       return rc;
    }
-   
+
    return rc;
 }
 
 /**
  * @brief Get a manifest from the cache, without processing it
- * @retval 0 Success, and set *manifest_buf and *manifest_buf_len to the allocated buffer and its length 
- * @retval -ENOMEM Out of Memory 
+ * @retval 0 Success, and set *manifest_buf and *manifest_buf_len to the allocated buffer and its length
+ * @retval -ENOMEM Out of Memory
  * @retval <0 I/O error
  */
 int SG_gateway_cached_manifest_get_raw( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* raw_serialized_manifest ) {
-   
+
    int rc = 0;
-   
-   // sanity check 
+
+   // sanity check
    if( !SG_request_is_manifest( reqdat ) ) {
       SG_error("Not a manifest request: %p\n", reqdat);
       return -EINVAL;
    }
-   
-   // lookaside: if this manifest is being written, then we can't read it 
+
+   // lookaside: if this manifest is being written, then we can't read it
    rc = md_cache_is_block_readable( gateway->cache, reqdat->file_id, reqdat->file_version, (uint64_t)reqdat->manifest_timestamp.tv_sec, (int64_t)reqdat->manifest_timestamp.tv_nsec );
    if( rc == -EAGAIN ) {
-      
-      // not available in the cache 
+
+      // not available in the cache
       SG_debug("Chunk is not readable at this time: %p\n", reqdat);
       return -ENOENT;
    }
@@ -2300,48 +2300,48 @@ int SG_gateway_cached_manifest_get_raw( struct SG_gateway* gateway, struct SG_re
       SG_debug("md_cache_is_block_readable rc = %d\n", rc );
       return rc;
    }
-   
-   // check cache disk 
+
+   // check cache disk
    rc = SG_gateway_cache_get_raw( gateway, reqdat, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec, raw_serialized_manifest );
    if( rc != 0 ) {
-      
-      // not available in the cache 
+
+      // not available in the cache
       SG_debug("Chunk is not in the cache (rc = %d)\n", rc);
       return rc;
    }
-   
+
    return rc;
 }
 
 
 /**
- * @brief Put a block directly into the cache 
- * @retval 0 Success, and set *cache_fut to the the future the caller can wait on 
- * @retval -EINVAL if this isn't a block request 
+ * @brief Put a block directly into the cache
+ * @retval 0 Success, and set *cache_fut to the the future the caller can wait on
+ * @retval -EINVAL if this isn't a block request
  * @retval <0 on I/O error
  */
 int SG_gateway_cached_block_put_raw_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* block, uint64_t cache_flags, struct md_cache_block_future** cache_fut ) {
-   
+
    if( !SG_request_is_block( reqdat ) ) {
       return -EINVAL;
    }
-   
+
    return SG_gateway_cache_put_raw_async( gateway, reqdat, reqdat->block_id, reqdat->block_version, block, cache_flags, cache_fut );
 }
-   
+
 
 /**
- * @brief Asynchronously put a serialized manifest directly into the cache 
- * @retval 0 Success, and set *manifest_fut to the newly-allocated cache future, which the caller can wait on to complete the write 
- * @retval -EINVAL if this isn't a manifest request 
+ * @brief Asynchronously put a serialized manifest directly into the cache
+ * @retval 0 Success, and set *manifest_fut to the newly-allocated cache future, which the caller can wait on to complete the write
+ * @retval -EINVAL if this isn't a manifest request
  * @retval <0 on I/O error
  */
 int SG_gateway_cached_manifest_put_raw_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* raw_serialized_manifest, uint64_t cache_flags, struct md_cache_block_future** manifest_fut ) {
-   
+
    if( !SG_request_is_manifest( reqdat ) ) {
       return -EINVAL;
    }
-   
+
    return SG_gateway_cache_put_raw_async( gateway, reqdat, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec, raw_serialized_manifest, cache_flags, manifest_fut );
 }
 
@@ -2349,14 +2349,14 @@ int SG_gateway_cached_manifest_put_raw_async( struct SG_gateway* gateway, struct
 /**
  * @brief Start an I/O request on one of the gateway's I/O work queues
  * @note wreq and all of its data must be heap-allocated.  The gateway will take ownership.
- * @retval 0 Success 
+ * @retval 0 Success
  * @retval <0 Error
  */
 int SG_gateway_io_start( struct SG_gateway* gateway, struct md_wreq* wreq ) {
-   
+
    int rc = 0;
    int wq_num = md_random64() % gateway->num_iowqs;     // NOTE: this is slightly biased
-   
+
    rc = md_wq_add( &gateway->iowqs[wq_num], wreq );
    return rc;
 }
@@ -2366,7 +2366,7 @@ int SG_gateway_io_start( struct SG_gateway* gateway, struct md_wreq* wreq ) {
  * @brief Get thread worker ID
  */
 uint64_t SG_gateway_io_thread_id( struct SG_gateway* gateway ) {
-   
+
    union {
       pthread_t t;
       uint64_t i;
@@ -2374,7 +2374,7 @@ uint64_t SG_gateway_io_thread_id( struct SG_gateway* gateway ) {
 
    io_thread_id_data.i = 0;
    io_thread_id_data.t = pthread_self();
-   
+
    return io_thread_id_data.i;
 }
 
@@ -2407,58 +2407,58 @@ int SG_gateway_impl_connect_cache( struct SG_gateway* gateway, CURL* curl, char 
 
 
 /**
- * @brief Stat a file, filling in what we know into the out_reqdat structure 
- * @retval 0 Success, populating *out_reqdat 
+ * @brief Stat a file, filling in what we know into the out_reqdat structure
+ * @retval 0 Success, populating *out_reqdat
  * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_stat( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_request_data* out_reqdat, mode_t* out_mode ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_stat != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_stat)( gateway, reqdat, out_reqdat, out_mode, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_stat( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Stat a file's block, filling in what we know into the out_reqdat structure 
- * @retval 0 Success, populating *out_reqdat 
+ * @brief Stat a file's block, filling in what we know into the out_reqdat structure
+ * @retval 0 Success, populating *out_reqdat
  * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_stat_block( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_request_data* out_reqdat, mode_t* out_mode ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_stat_block != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_stat_block)( gateway, reqdat, out_reqdat, out_mode, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_stat_block( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2467,29 +2467,29 @@ int SG_gateway_impl_stat_block( struct SG_gateway* gateway, struct SG_request_da
 /**
  * @brief Truncate a file.
  *
- * @note The implementation MUST reversion the file to complete the operation 
+ * @note The implementation MUST reversion the file to complete the operation
  * @retval 0 Success
- * @retval -ENOSYS Not defined 
+ * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_truncate( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t new_size ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_truncate != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_truncate)( gateway, reqdat, new_size, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_truncate( %" PRIX64 ".%" PRId64 " (%s), %" PRIu64 " ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, new_size, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2498,28 +2498,28 @@ int SG_gateway_impl_truncate( struct SG_gateway* gateway, struct SG_request_data
 /**
  * @brief Rename a file
  * @note The implementation MUST inform the MS of the rename
- * @retval 0 Success 
- * @retval -ENOSYS Not defined 
+ * @retval 0 Success
+ * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
- */ 
+ */
 int SG_gateway_impl_rename( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* serialized_manifest, char const* new_path ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_rename != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_rename)( gateway, reqdat, serialized_manifest, new_path, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_rename( %" PRIX64 ".%" PRId64 " (%s), %s ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, new_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2528,87 +2528,87 @@ int SG_gateway_impl_rename( struct SG_gateway* gateway, struct SG_request_data* 
 /**
  * @brief Hint that a file was renamed
  * @note The implementation does not need to take any action, unlike rename
- * @retval 0 Success 
- * @retval -ENOSYS Not defined 
+ * @retval 0 Success
+ * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_rename_hint( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* serialized_manifest, char const* new_path ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_rename_hint != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_rename_hint)( gateway, reqdat, serialized_manifest, new_path, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_rename_hint( %" PRIX64 ".%" PRId64 " (%s), %s ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, new_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Detach a file 
- * @note The implementation MUST inform the MS of the detach 
- * @retval 0 Success 
- * @retval -ENOSYS Not defined 
+ * @brief Detach a file
+ * @note The implementation MUST inform the MS of the detach
+ * @retval 0 Success
+ * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
- */ 
+ */
 int SG_gateway_impl_detach( struct SG_gateway* gateway, struct SG_request_data* reqdat ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_detach != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_detach)( gateway, reqdat, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_detach( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Refresh a file 
- * @retval 0 Success 
- * @retval -ENOSYS Not defined 
+ * @brief Refresh a file
+ * @retval 0 Success
+ * @retval -ENOSYS Not defined
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_refresh( struct SG_gateway* gateway, struct SG_request_data* reqdat ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_refresh != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_refresh)( gateway, reqdat, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_refresh( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2619,11 +2619,11 @@ int SG_gateway_impl_refresh( struct SG_gateway* gateway, struct SG_request_data*
  * @retval 0 Success
  * @retval -ENOSYS Not defined
  * @retval !0 Error
- */ 
+ */
 int SG_gateway_impl_serialize( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* in_chunk, struct SG_chunk* out_chunk ) {
 
    int rc = 0;
-   
+
    if( gateway->impl_serialize != NULL ) {
 
       rc = (*gateway->impl_serialize)( gateway, reqdat, in_chunk, out_chunk, gateway->cls );
@@ -2635,7 +2635,7 @@ int SG_gateway_impl_serialize( struct SG_gateway* gateway, struct SG_request_dat
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2647,7 +2647,7 @@ int SG_gateway_impl_serialize( struct SG_gateway* gateway, struct SG_request_dat
  * @retval 0 Success
  * @retval -ENOSYS Not defined
  * @retval !0 Error
- */ 
+ */
 int SG_gateway_impl_deserialize( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* in_chunk, struct SG_chunk* out_chunk ) {
 
    int rc = 0;
@@ -2662,7 +2662,7 @@ int SG_gateway_impl_deserialize( struct SG_gateway* gateway, struct SG_request_d
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2670,115 +2670,115 @@ int SG_gateway_impl_deserialize( struct SG_gateway* gateway, struct SG_request_d
 
 /**
  * @brief Get a manifest from the implementation
- * @retval 0 Success, and populate *manifest 
+ * @retval 0 Success, and populate *manifest
  * @retval -ENOSYS Not defined
  * @retval !0 Implementation-specific failure
- */ 
+ */
 int SG_gateway_impl_manifest_get( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_manifest* manifest, uint64_t hints ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_get_manifest != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_get_manifest)( gateway, reqdat, manifest, hints, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_get_manifest( %" PRIX64 ".%" PRId64 "[manifest %" PRIu64 ".%ld] (%s) ) rc = %d\n",
                    reqdat->file_id, reqdat->file_version, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Put a protobuf'ed manifest into the implementation 
+ * @brief Put a protobuf'ed manifest into the implementation
  * @retval 0 Success
  * @retval -ENOSYS if not implemented
  * @retval !0 Implementation-specific error
  */
 int SG_gateway_impl_manifest_put( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* chunk, uint64_t hints ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_put_manifest != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_put_manifest)( gateway, reqdat, chunk, hints, gateway->cls );
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_put_manifest( %" PRIX64 ".%" PRId64 "[manifest %" PRIu64 ".%ld] (%s) ) rc = %d\n",
                    reqdat->file_id, reqdat->file_version, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Patch a manifest 
- * @note The gateway MUST inform the MS of the new manifest information 
+ * @brief Patch a manifest
+ * @note The gateway MUST inform the MS of the new manifest information
  * @retval 0 Success
  * @retval !0 Implemetation error
  */
 int SG_gateway_impl_manifest_patch( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_manifest* write_delta ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_patch_manifest != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_patch_manifest)( gateway, reqdat, write_delta, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_patch_manifest( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Delete a manifest 
+ * @brief Delete a manifest
  * @retval 0 Success
  * @retval !0 Implemetation error
  */
 int SG_gateway_impl_manifest_delete( struct SG_gateway* gateway, struct SG_request_data* reqdat) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_delete_manifest != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_delete_manifest)( gateway, reqdat, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_delete_manifest( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2793,82 +2793,82 @@ int SG_gateway_impl_manifest_delete( struct SG_gateway* gateway, struct SG_reque
  * @retval !0 Implementation-specific error
  */
 int SG_gateway_impl_block_get( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* block, uint64_t hints ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_get_block != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_get_block)( gateway, reqdat, block, hints, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_get_block( %" PRIX64 ".%" PRId64 "[%" PRIu64 ".%" PRId64 "] (%s) ) rc = %d\n",
                   reqdat->file_id, reqdat->file_version, reqdat->block_id, reqdat->block_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Put a block into the implementation 
- * @retval 0 Success 
+ * @brief Put a block into the implementation
+ * @retval 0 Success
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_block_put( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* block, uint64_t hints ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_put_block != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_put_block)( gateway, reqdat, block, hints, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_put_block( %" PRIX64 ".%" PRId64 "[%" PRIu64 ".%" PRId64 "] (%s) ) rc = %d\n",
                    reqdat->file_id, reqdat->file_version, reqdat->block_id, reqdat->block_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Delete a block in the implementation 
- * @retval 0 Success 
+ * @brief Delete a block in the implementation
+ * @retval 0 Success
  * @retval !0 Implementation error
- */ 
+ */
 int SG_gateway_impl_block_delete( struct SG_gateway* gateway, struct SG_request_data* reqdat ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_delete_block != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_delete_block)( gateway, reqdat, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
-         SG_error("gateway->impl_delete_block( %" PRIX64 ".%" PRId64 " [%" PRIu64 ".%" PRId64 "] (%s) rc = %d\n", 
+
+         SG_error("gateway->impl_delete_block( %" PRIX64 ".%" PRId64 " [%" PRIu64 ".%" PRId64 "] (%s) rc = %d\n",
                   reqdat->file_id, reqdat->file_version, reqdat->block_id, reqdat->block_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2881,51 +2881,51 @@ int SG_gateway_impl_block_delete( struct SG_gateway* gateway, struct SG_request_
  * @retval !0 Implemetation error
  */
 int SG_gateway_impl_getxattr( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* xattr_value ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_getxattr != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_getxattr)( gateway, reqdat, xattr_value, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_getxattr( %" PRIX64 ".%" PRId64 " (%s) %s.%" PRId64 " ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, reqdat->xattr_name, reqdat->xattr_nonce, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief List xattrs 
- * @retval 0 Success 
+ * @brief List xattrs
+ * @retval 0 Success
  * @retval !0 Implementation error
  */
 int SG_gateway_impl_listxattr( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk** xattr_names, size_t* num_xattrs ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_listxattr != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_listxattr)( gateway, reqdat, xattr_names, num_xattrs, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_listxattr( %" PRIX64 ".%" PRId64 " (%s) ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2938,23 +2938,23 @@ int SG_gateway_impl_listxattr( struct SG_gateway* gateway, struct SG_request_dat
  * @retval !0 Implemetation error
  */
 int SG_gateway_impl_setxattr( struct SG_gateway* gateway, struct SG_request_data* reqdat, struct SG_chunk* xattr_value ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_setxattr != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_setxattr)( gateway, reqdat, xattr_value, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_setxattr( %" PRIX64 ".%" PRId64 " (%s) %s.%" PRId64 " ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, reqdat->xattr_name, reqdat->xattr_nonce, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
@@ -2966,37 +2966,37 @@ int SG_gateway_impl_setxattr( struct SG_gateway* gateway, struct SG_request_data
  * @retval !0 Implemetation error
  */
 int SG_gateway_impl_removexattr( struct SG_gateway* gateway, struct SG_request_data* reqdat ) {
-   
+
    int rc = 0;
-   
+
    if( gateway->impl_removexattr != NULL ) {
-      
+
       reqdat->io_thread_id = SG_gateway_io_thread_id( gateway );
       rc = (*gateway->impl_removexattr)( gateway, reqdat, gateway->cls );
-      
+
       if( rc != 0 ) {
-         
+
          SG_error("gateway->impl_removexattr( %" PRIX64 ".%" PRId64 " (%s) %s.%" PRId64 " ) rc = %d\n", reqdat->file_id, reqdat->file_version, reqdat->fs_path, reqdat->xattr_name, reqdat->xattr_nonce, rc );
       }
-      
+
       return rc;
    }
    else {
-      
+
       return -ENOSYS;
    }
 }
 
 
 /**
- * @brief Convert an md_entry into an SG_request_data 
+ * @brief Convert an md_entry into an SG_request_data
  * @retval 0 Success
  * @retval -ENOMEM Out of Memory
  */
 int SG_request_data_from_md_entry( struct SG_request_data* reqdat, char const* fs_path, struct md_entry* ent, uint64_t block_id, int64_t block_version ) {
-   
+
    memset( reqdat, 0, sizeof(struct SG_request_data) );
-   
+
    reqdat->user_id = ent->owner;
    reqdat->volume_id = ent->volume;
    reqdat->file_id = ent->file_id;
@@ -3011,10 +3011,10 @@ int SG_request_data_from_md_entry( struct SG_request_data* reqdat, char const* f
    reqdat->listxattr = false;
    reqdat->xattr_name = NULL;
    reqdat->xattr_nonce = ent->xattr_nonce;
-   
+
    if( reqdat->fs_path == NULL ) {
       return -ENOMEM;
    }
-   
+
    return 0;
 }
