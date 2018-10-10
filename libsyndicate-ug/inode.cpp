@@ -461,6 +461,9 @@ int UG_file_handle_init( struct UG_file_handle* fh, struct UG_inode* inode, int 
    fh->inode_ref = inode;
    fh->flags = flags;
 
+   fh->read_buffer = NULL;
+   fh->read_buffer_offset = 0;
+   fh->read_buffer_data_len = 0;
    return 0;
 }
 
@@ -472,6 +475,7 @@ int UG_file_handle_init( struct UG_file_handle* fh, struct UG_inode* inode, int 
  */
 int UG_file_handle_free( struct UG_file_handle* fh ) {
 
+   SG_safe_free(fh->read_buffer);
    memset( fh, 0, sizeof(struct UG_file_handle) );
 
    return 0;
@@ -737,14 +741,14 @@ int UG_inode_export( struct md_entry* dest, struct UG_inode* src, uint64_t paren
    dest->ent_sig_len = 0;
 
    /////////////////////////////////////
-   
+
    char* tmp = NULL;
    int rc = md_entry_to_string( dest, &tmp );
    if( rc == 0 && tmp != NULL ) {
       SG_debug("Exported '%s' with:\n%s\n", dest->name, tmp );
       SG_safe_free( tmp );
    }
-   
+
    /////////////////////////////////////
    return 0;
 }
@@ -1448,7 +1452,7 @@ int UG_inode_dirty_block_update_manifest( struct SG_gateway* gateway, struct UG_
    }
    */
    if( !UG_dirty_block_dirty( dirty_block ) ) {
-      // nothing to do 
+      // nothing to do
       return 0;
    }
 
@@ -2226,7 +2230,7 @@ void UG_inode_set_fskit_entry( struct UG_inode* inode, struct fskit_entry* ent )
 /**
  * @brief Set the size associated with this inode
  * @attention Requires inode->entry to be write-locked
- * @note The entry can sometimes be NULL, such as when we're initializing the root inode 
+ * @note The entry can sometimes be NULL, such as when we're initializing the root inode
  */
 void UG_inode_set_size( struct UG_inode* inode, uint64_t new_size ) {
    if( inode->entry != NULL ) {
@@ -2270,13 +2274,13 @@ void UG_inode_preserve_old_manifest_modtime( struct UG_inode* inode ) {
 
 
 /**
- * @brief Get the number of non-dirty (clean) blocks there are in the inode's dirty block set 
+ * @brief Get the number of non-dirty (clean) blocks there are in the inode's dirty block set
  *
  * @attention inode->entry must be read-locked
  * @note These blocks get cached here on read
  */
 uint64_t UG_inode_count_clean_blocks( struct UG_inode* inode ) {
-    
+
     uint64_t count = 0;
     for( UG_dirty_block_map_t::iterator itr = inode->dirty_blocks->begin(); itr != inode->dirty_blocks->end(); itr++ ) {
         if( !UG_dirty_block_dirty( &itr->second ) ) {
@@ -2294,7 +2298,7 @@ uint64_t UG_inode_count_clean_blocks( struct UG_inode* inode ) {
  * @attention inode->entry must be read-locked
  */
 uint64_t UG_inode_find_clean_block_id( struct UG_inode* inode, uint64_t n ) {
-    
+
    uint64_t block_id = -1;
    uint64_t i = n;
    for( UG_dirty_block_map_t::iterator itr = inode->dirty_blocks->begin(); itr != inode->dirty_blocks->end(); itr++ ) {
@@ -2312,7 +2316,7 @@ uint64_t UG_inode_find_clean_block_id( struct UG_inode* inode, uint64_t n ) {
 
 
 /**
- * @brief Evict a clean block from the dirty inode set 
+ * @brief Evict a clean block from the dirty inode set
  * @retval 0 Success
  * @retval -ENOENT Absent
  * @retval -EINVAL Dirty

@@ -54,6 +54,11 @@ struct UG_file_handle {
    struct UG_inode* inode_ref;           ///< Reference to the parent inode (i.e. so we can release dirty blocks)
 
    struct fskit_file_handle* handle_ref; ///< Refernece to the parent fskit file handle
+
+   // iychoi added
+   char* read_buffer;
+   off_t read_buffer_offset;
+   int read_buffer_data_len;
 };
 
 
