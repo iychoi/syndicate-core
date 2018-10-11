@@ -46,6 +46,13 @@ typedef queue< struct UG_sync_context* > UG_inode_fsync_queue_t;
 // UG-specific inode information, for fskit
 struct UG_inode;
 
+struct UG_read_prefetch_param {
+    struct SG_gateway* gateway;
+    char* fs_path;
+    off_t offset;
+    struct UG_file_handle* fh;
+};
+
 /// UG-specific file handle information, for fskit
 struct UG_file_handle {
 
@@ -56,9 +63,26 @@ struct UG_file_handle {
    struct fskit_file_handle* handle_ref; ///< Refernece to the parent fskit file handle
 
    // iychoi added
+   pthread_rwlock_t read_buffer_lock;
+
+   uint64_t block_size;
+
    char* read_buffer;
    off_t read_buffer_offset;
    int read_buffer_data_len;
+   bool read_buffer_EOF;
+
+   pthread_rwlock_t prefetch_lock;
+
+   bool prefetch_thread_running;
+   pthread_t prefetch_thread;
+   struct UG_read_prefetch_param* prefetch_param;
+   char* prefetch_buffer;
+
+   char* second_read_buffer;
+   off_t second_read_buffer_offset;
+   int second_read_buffer_data_len;
+   bool second_read_buffer_EOF;
 };
 
 

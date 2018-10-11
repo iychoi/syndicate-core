@@ -1070,6 +1070,405 @@ UG_read_blocks_end:
    return rc;
 }
 
+int UG_read_prefetch_impl( struct SG_gateway* gateway, char const* fs_path, char* buf, size_t buf_len, off_t offset, struct UG_file_handle* fh ) {
+
+   int rc = 0;
+
+   uint64_t file_id = 0;
+   int64_t file_version = 0;
+   uint64_t coordinator_id = 0;
+   int64_t write_nonce = 0;
+   int64_t num_read = 0;
+
+   bool have_unaligned_head = false;
+   bool have_unaligned_tail = false;
+   uint64_t head_len = 0;
+   uint64_t tail_len = 0;
+   uint64_t first_block = 0;
+   uint64_t last_block = 0;
+   uint64_t file_size = 0;
+   uint64_t copy_len = 0;
+   uint64_t copy_at = 0;
+   uint64_t block_copy_at = 0;
+   uint64_t buf_len_eof = 0;
+
+   struct SG_chunk* head_buf = NULL;
+   struct SG_chunk* tail_buf = NULL;
+
+   struct ms_client* ms = SG_gateway_ms( gateway );
+   uint64_t block_size = ms_client_get_volume_blocksize( ms );
+   uint64_t volume_id = ms_client_get_volume_id( ms );
+   struct UG_inode* inode = fh->inode_ref;
+
+   UG_dirty_block_map_t read_blocks;
+   UG_dirty_block_map_t* inode_blocks = NULL;
+
+   struct UG_dirty_block* last_block_read = NULL;
+   uint64_t free_clean_block_id = 0;
+   bool cached_clean_block = false;
+   bool last_block_cached = false;
+   UG_dirty_block_map_t::iterator last_block_read_itr;
+
+   struct SG_manifest blocks_to_download;
+   memset( &blocks_to_download, 0, sizeof(struct SG_manifest) );
+
+   SG_debug("Read %s offset %jd length %zu\n", fs_path, offset, buf_len );
+   if( buf_len == 0 ) {
+      return 0;
+   }
+
+   // make sure the inode is fresh
+   rc = UG_consistency_inode_ensure_fresh( gateway, fs_path, inode );
+   if( rc < 0 ) {
+     SG_error("UG_consistency_inode_ensure_fresh('%s') rc = %d\n", fs_path, rc );
+     return rc;
+   }
+
+   // make sure the manifest is fresh
+   rc = UG_consistency_manifest_ensure_fresh( gateway, fs_path );
+
+   file_id = UG_inode_file_id( inode );
+   file_version = UG_inode_file_version( inode );
+   coordinator_id = UG_inode_coordinator_id( inode );
+   write_nonce = UG_inode_write_nonce( inode );
+   file_size = UG_inode_size( inode );
+
+   if( file_size == 0 ) {
+       // nothing to do
+       return 0;
+   }
+
+   first_block = offset / block_size;
+   last_block = MIN( file_size / block_size, (offset + buf_len) / block_size);
+
+   SG_debug("Read blocks %" PRIu64 "-%" PRIu64 "\n", first_block, last_block);
+
+   if( rc != 0 ) {
+
+      SG_error("UG_consistency_manifest_ensure_fresh( %" PRIX64 " ('%s')) rc = %d\n", file_id, fs_path, rc );
+      return rc;
+   }
+
+   // sanity check: can't exceed file size
+   if( (unsigned)offset >= UG_inode_size( inode ) ) {
+
+      // EOF
+      SG_debug("EOF on %" PRIX64 "\n", file_id );
+      return 0;
+   }
+
+   // set of blocks to download
+   rc = SG_manifest_init( &blocks_to_download, volume_id, coordinator_id, file_id, file_version );
+   if( rc != 0 ) {
+
+      SG_error("SG_manifest_init rc = %d\n", rc );
+
+      return rc;
+   }
+
+   // get unaligned blocks
+   rc = UG_read_unaligned_setup( gateway, fs_path, inode, buf_len, offset, &read_blocks, &head_len, &tail_len );
+   if( rc < 0 ) {
+
+      SG_error("UG_read_unaligned_setup( %s, %zu, %jd ) rc = %d\n", fs_path, buf_len, offset, rc );
+
+      SG_manifest_free( &blocks_to_download );
+      return rc;
+   }
+
+   // head/tail unaligned?
+   if( head_len != 0 ) {
+      have_unaligned_head = true;
+   }
+   if( tail_len != 0 ) {
+      have_unaligned_tail = true;
+   }
+
+   SG_debug("Unaligned read: %d bytes (head unaligned: %d, tail unaligned: %d, head_len = %" PRIu64 ", tail_len = %" PRIu64 ")\n", rc, have_unaligned_head, have_unaligned_tail, head_len, tail_len );
+   num_read += rc;
+
+   // set up aligned read
+   rc = UG_read_aligned_setup( inode, buf, buf_len, offset, block_size, &read_blocks );
+   if( rc < 0 ) {
+
+      SG_error("UG_read_aligned_setup( %s, %zu, %jd ) rc = %d\n", fs_path, buf_len, offset, rc );
+
+      UG_dirty_block_map_free( &read_blocks );
+
+      SG_manifest_free( &blocks_to_download );
+
+      return rc;
+   }
+
+   SG_debug("Aligned read: %d bytes\n", rc );
+   num_read += rc;
+
+   // fetch local
+   rc = UG_read_blocks_local( gateway, fs_path, inode, &read_blocks, offset, buf_len, &blocks_to_download );
+   if( rc != 0 ) {
+
+      SG_error("UG_read_blocks_local( %" PRIX64 ".%" PRId64 "[%" PRIu64 " - %" PRIu64 "] ) rc = %d\n",
+               file_id, file_version, (offset / block_size), ((offset + buf_len) / block_size), rc );
+
+      UG_dirty_block_map_free( &read_blocks );
+
+      SG_manifest_free( &blocks_to_download );
+      return rc;
+   }
+
+   // is the last block in the dirty block set?
+   last_block_cached = (UG_inode_dirty_blocks(inode)->find(last_block) != UG_inode_dirty_blocks(inode)->end());
+
+   // anything left to fetch remotely?
+   if( SG_manifest_get_block_count( &blocks_to_download ) > 0 ) {
+
+      // fetch remote
+      SG_debug("Download %zu blocks\n", SG_manifest_get_block_count( &blocks_to_download ));
+      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks );
+      if( rc != 0 ) {
+
+         SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
+                  file_id, file_version, (offset / block_size), ((offset + buf_len) / block_size), rc );
+
+         num_read = rc;
+         goto UG_read_impl_fail;
+      }
+   }
+
+   // success!
+
+   // copy unaligned blocks back into the buffer
+   if( have_unaligned_head ) {
+
+      auto head_itr = read_blocks.find( first_block );
+      if( head_itr == read_blocks.end() ) {
+         SG_error("BUG: head block %" PRIu64 " is missing\n", first_block );
+         exit(1);
+      }
+
+      copy_len = head_len;
+      if( buf_len < head_len ) {
+         copy_len = buf_len;
+      }
+
+      block_copy_at = offset % block_size;
+
+      head_buf = UG_dirty_block_buf( &head_itr->second );
+
+      /////////////////////////////////////////////////////
+      char debug_buf[52];
+      memset(debug_buf, 0, 52);
+      for( unsigned int i = 0; i < (50 / 3) && i < copy_len; i++ ) {
+         char nbuf[5];
+         memset(nbuf, 0, 5);
+         snprintf(nbuf, 4, " %02X", *(head_buf->data + block_copy_at + i));
+         strcat(debug_buf, nbuf);
+      }
+      /////////////////////////////////////////////////////
+
+      SG_debug("Copy unaligned head %" PRIu64 " at offset %" PRIu64 " (block offset %zu, %" PRIu64 " bytes, '%s...' at %p)\n", first_block, (uint64_t)offset, block_copy_at, copy_len, debug_buf, head_buf->data );
+      memcpy( buf, head_buf->data + block_copy_at, copy_len );
+   }
+
+   if( have_unaligned_tail ) {
+
+      buf_len_eof = buf_len;
+      if( offset + buf_len > file_size ) {
+         buf_len_eof = file_size - offset;
+      }
+
+      auto tail_itr = read_blocks.find( last_block );
+      if( tail_itr == read_blocks.end() ) {
+         SG_error("BUG: tail block %" PRIu64 " is missing\n", last_block );
+         exit(1);
+      }
+
+      if( tail_len < buf_len_eof ) {
+         copy_at = buf_len_eof - tail_len;
+      }
+      else {
+         copy_at = 0;
+      }
+
+      tail_buf = UG_dirty_block_buf( &tail_itr->second );
+
+      /////////////////////////////////////////////////////
+      char debug_buf[52];
+      memset(debug_buf, 0, 52);
+      for( unsigned int i = 0; i < (50 / 3) && i < tail_len; i++ ) {
+         char nbuf[5];
+         memset(nbuf, 0, 5);
+         snprintf(nbuf, 4, " %02X", tail_buf->data[i]);
+         strcat(debug_buf, nbuf);
+      }
+      /////////////////////////////////////////////////////
+
+      SG_debug("Copy unaligned tail %" PRIu64 " at %" PRIu64 " (%" PRIu64 " bytes, '%s...'); buf_len_eof = %" PRIu64 "\n", last_block, copy_at, tail_len, debug_buf, buf_len_eof );
+      memcpy( buf + copy_at, tail_buf->data, tail_len );
+   }
+
+   // optimization: cache last read block, but only if no writes occurred while we were fetching remote blocks
+   // and only if it wasn't already cached.
+   if( have_unaligned_tail && !last_block_cached ) {
+
+      if( file_version == UG_inode_file_version( inode ) && write_nonce == UG_inode_write_nonce( inode ) ) {
+
+         inode_blocks = UG_inode_dirty_blocks(inode);
+         last_block_read_itr = read_blocks.find( last_block );
+         if( last_block_read_itr != read_blocks.end() && inode_blocks->find(last_block) == inode_blocks->end() ) {
+
+            // this block is not cached.
+            last_block_read = &last_block_read_itr->second;
+
+            rc = 0;
+            UG_dirty_block_set_dirty(last_block_read, false);
+
+            if( !have_unaligned_tail ) {
+                // need to unshare
+                rc = UG_dirty_block_buf_unshare(last_block_read);
+            }
+
+            if( rc == 0 ) {
+                // cache this block
+                rc = UG_inode_dirty_block_put( gateway, inode, last_block_read, false );
+                if( rc != 0 ) {
+
+                   // not fatal, but annoying...
+                   SG_error("UG_inode_dirty_block_put( %s, %zu, %jd ) rc = %d\n", fs_path, buf_len, offset, rc );
+                   rc = 0;
+                }
+
+                cached_clean_block = true;
+            }
+            else {
+               // OOM
+               // not fatal here, but annoying
+               rc = 0;
+            }
+         }
+
+         // also, free an earlier clean block if possible
+         if( cached_clean_block ) {
+             free_clean_block_id = UG_inode_find_clean_block_id( inode, 0 );
+             if( free_clean_block_id < UG_dirty_block_id(last_block_read) ) {
+                SG_debug("Evict earlier clean block %" PRIu64 "\n", free_clean_block_id);
+                UG_inode_evict_clean_block( inode, free_clean_block_id );
+             }
+
+             // don't free; we've gifted it
+             read_blocks.erase( last_block_read_itr );
+         }
+      }
+   }
+
+UG_read_impl_fail:
+
+   UG_dirty_block_map_free( &read_blocks );
+
+   SG_manifest_free( &blocks_to_download );
+
+   if( num_read > 0 ) {
+
+      /////////////////////////////////////////////////////
+      char debug_buf[52];
+      memset(debug_buf, 0, 52);
+      for( int i = 0; i < (50 / 3) && i < num_read; i++ ) {
+         char nbuf[5];
+         memset(nbuf, 0, 5);
+         snprintf(nbuf, 4, " %02X", buf[i]);
+         strcat(debug_buf, nbuf);
+      }
+      /////////////////////////////////////////////////////
+
+      SG_debug("Read %" PRId64 " bytes (%s...)\n", num_read, debug_buf);
+   }
+
+   return num_read;
+}
+
+static void* _UG_prefetch_impl(void* param) {
+    struct UG_read_prefetch_param* prefetch_param = (struct UG_read_prefetch_param*) param;
+
+    struct SG_gateway* gateway = prefetch_param->gateway;
+    char const* fs_path = prefetch_param->fs_path;
+    off_t offset = prefetch_param->offset;
+    struct UG_file_handle* fh = prefetch_param->fh;
+
+    SG_debug("Prefetch (background) %s, offset %jd\n", fs_path, offset );
+
+    int read_len = UG_read_prefetch_impl( gateway, fs_path, fh->prefetch_buffer, fh->block_size, offset, fh );
+
+    if(read_len < 0) {
+        // fail
+        pthread_rwlock_wrlock(&fh->read_buffer_lock);
+        fh->second_read_buffer_offset = offset;
+        fh->second_read_buffer_data_len = 0;
+        fh->second_read_buffer_EOF = false;
+        pthread_rwlock_unlock(&fh->read_buffer_lock);
+        return NULL;
+    }
+
+    if(read_len == 0) {
+        //EOF
+        pthread_rwlock_wrlock(&fh->read_buffer_lock);
+        fh->second_read_buffer_offset = offset;
+        fh->second_read_buffer_data_len = 0;
+        fh->second_read_buffer_EOF = true;
+        pthread_rwlock_unlock(&fh->read_buffer_lock);
+    } else {
+        pthread_rwlock_wrlock(&fh->read_buffer_lock);
+        char* temp = fh->second_read_buffer;
+        fh->second_read_buffer = fh->prefetch_buffer;
+        fh->prefetch_buffer = temp;
+
+        fh->second_read_buffer_offset = offset;
+        fh->second_read_buffer_data_len = read_len;
+        fh->second_read_buffer_EOF = false;
+        pthread_rwlock_unlock(&fh->read_buffer_lock);
+    }
+    return NULL;
+}
+
+int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* route_metadata, struct fskit_entry* fent, off_t offset, void* handle_data ) {
+
+    int rc = 0;
+    struct UG_file_handle* fh = (struct UG_file_handle*)handle_data;
+
+    pthread_rwlock_wrlock(&fh->prefetch_lock);
+    if(fh->prefetch_thread_running) {
+        // error
+        pthread_rwlock_unlock(&fh->prefetch_lock);
+        return -1;
+    }
+
+    // save to a param
+    struct SG_gateway* gateway = (struct SG_gateway*)fskit_core_get_user_data( core );
+    char const* fs_path = fskit_route_metadata_get_path( route_metadata );
+
+    SG_debug("Prefetch %s, offset %jd\n", fs_path, offset );
+
+    fh->prefetch_param->gateway = gateway;
+    // reuse if possible
+    if(fh->prefetch_param->fs_path == NULL) {
+        fh->prefetch_param->fs_path = strdup(fs_path);
+    }
+    fh->prefetch_param->offset = offset;
+    fh->prefetch_param->fh = fh;
+    if(fh->prefetch_buffer == NULL) {
+        fh->prefetch_buffer = SG_CALLOC( char, fh->block_size );
+    }
+
+    rc = pthread_create(&fh->prefetch_thread, NULL, _UG_prefetch_impl, (void*)fh->prefetch_param);
+    if(rc != 0) {
+        pthread_rwlock_unlock(&fh->prefetch_lock);
+        return rc;
+    }
+
+    fh->prefetch_thread_running = true;
+    pthread_rwlock_unlock(&fh->prefetch_lock);
+    return 0;
+}
+
 /**
  * buffer read for performance
  */
@@ -1081,47 +1480,155 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
        return 0;
    }
 
+   // load block size
+   if(fh->block_size == 0) {
+       struct SG_gateway* gateway = (struct SG_gateway*)fskit_core_get_user_data( core );
+       struct ms_client* ms = SG_gateway_ms( gateway );
+       uint64_t block_size = ms_client_get_volume_blocksize( ms );
+
+       fh->block_size = block_size;
+   }
+
    int total_read = 0;
 
-   if(fh->read_buffer) {
-       // has buffered data?
-       if(fh->read_buffer_offset <= offset && fh->read_buffer_offset + fh->read_buffer_data_len > offset) {
+   SG_debug("read from read buffer, offset %jd\n", offset );
+   pthread_rwlock_rdlock(&fh->read_buffer_lock);
+   // has buffered data?
+   if(fh->read_buffer_offset <= offset && (off_t) (fh->read_buffer_offset + fh->read_buffer_data_len) > offset) {
+       if(fh->read_buffer_data_len > 0 && !fh->read_buffer_EOF) {
            // use buffered data
            off_t boffset = offset - fh->read_buffer_offset;
            int max_read = MIN(fh->read_buffer_data_len - boffset, buf_len); // available data len in the buffer
            memcpy( buf + total_read, fh->read_buffer + boffset, max_read);
            total_read += max_read;
+
+           pthread_rwlock_unlock(&fh->read_buffer_lock);
+           SG_debug("finished read from read buffer, offset %jd\n", offset );
+           return total_read;
+       } else if(fh->read_buffer_EOF) {
+           pthread_rwlock_unlock(&fh->read_buffer_lock);
+           SG_debug("finished read from read buffer (EOF), offset %jd\n", offset );
+           return 0;
+       }
+   }
+   pthread_rwlock_unlock(&fh->read_buffer_lock);
+
+   // data is not buffered in the read buffer
+   // check if there is prefetched data
+   SG_debug("checking prefetch thread %p\n", &fh->prefetch_thread);
+   pthread_rwlock_wrlock(&fh->prefetch_lock);
+   if(fh->prefetch_thread_running) {
+       // prefetch thread is running
+       SG_debug("joining the prefetch thread %p\n", &fh->prefetch_thread);
+       pthread_join(fh->prefetch_thread, NULL);
+
+       fh->prefetch_thread_running = false;
+
+       fh->prefetch_param->gateway = NULL;
+       //fh->prefetch_param->fs_path = NULL; // reuse
+       fh->prefetch_param->offset = 0;
+       fh->prefetch_param->fh = NULL;
+       SG_debug("prefetch thread is joined %p\n", &fh->prefetch_thread);
+   }
+   pthread_rwlock_unlock(&fh->prefetch_lock);
+
+   SG_debug("read from second read buffer, offset %jd\n", offset );
+   pthread_rwlock_wrlock(&fh->read_buffer_lock);
+   if(fh->second_read_buffer_offset <= offset && (off_t) (fh->second_read_buffer_offset + fh->second_read_buffer_data_len) > offset) {
+       if(fh->second_read_buffer_data_len > 0 && !fh->second_read_buffer_EOF) {
+           // use second buffered data
+           // swap
+           SG_debug("swapping the prefetch buffer, offset %jd\n", fh->second_read_buffer_offset);
+
+           char* temp_buffer = fh->second_read_buffer;
+           fh->second_read_buffer = fh->read_buffer;
+           fh->read_buffer = temp_buffer;
+
+           fh->read_buffer_offset = fh->second_read_buffer_offset;
+           fh->read_buffer_data_len = fh->second_read_buffer_data_len;
+           fh->read_buffer_EOF = fh->second_read_buffer_EOF;
+           fh->second_read_buffer_offset = 0;
+           fh->second_read_buffer_data_len = 0;
+
+           // re-read
+           SG_debug("re-read from read buffer, offset %jd\n", offset );
+           off_t next_offset = fh->read_buffer_offset + fh->read_buffer_data_len;
+
+           off_t boffset = offset - fh->read_buffer_offset;
+           int max_read = MIN(fh->read_buffer_data_len - boffset, buf_len); // available data len in the buffer
+           memcpy( buf + total_read, fh->read_buffer + boffset, max_read);
+           total_read += max_read;
+
+           pthread_rwlock_unlock(&fh->read_buffer_lock);
+
+           // start prefetch
+           UG_prefetch_impl(core, route_metadata, fent, next_offset, handle_data);
+           SG_debug("finished re-read from read buffer, offset %jd\n", offset );
+           return total_read;
+       } else if(fh->second_read_buffer_EOF) {
+           SG_debug("swapping the prefetch buffer, offset %jd\n", fh->second_read_buffer_offset);
+
+           char* temp_buffer = fh->second_read_buffer;
+           fh->second_read_buffer = fh->read_buffer;
+           fh->read_buffer = temp_buffer;
+
+           fh->read_buffer_offset = fh->second_read_buffer_offset;
+           fh->read_buffer_data_len = fh->second_read_buffer_data_len;
+           fh->read_buffer_EOF = fh->second_read_buffer_EOF;
+           fh->second_read_buffer_offset = 0;
+           fh->second_read_buffer_data_len = 0;
+
+           pthread_rwlock_unlock(&fh->read_buffer_lock);
+           SG_debug("finished re-read from read buffer (EOF), offset %jd\n", offset );
+           return 0;
        }
    }
 
-   while(buf_len - total_read > 0) {
-       // read more
-       if(fh->read_buffer == NULL) {
-           fh->read_buffer = SG_CALLOC( char, 1024*1024 ); // 1MB
-           fh->read_buffer_offset = 0;
-           fh->read_buffer_data_len = 0;
-       }
-
-       int read_len = UG_read_impl( core, route_metadata, fent, fh->read_buffer, 1024*1024, offset + total_read, handle_data );
-       if(read_len < 0) {
-           return read_len;
-       }
-
-       if(read_len == 0) {
-           //EOF
-           memset(fh->read_buffer, 0, 1024*1024);
-           fh->read_buffer_offset = 0;
-           fh->read_buffer_data_len = 0;
-           break;
-       }
-
-       fh->read_buffer_offset = offset + total_read;
-       fh->read_buffer_data_len = read_len;
-
-       int max_read = MIN(fh->read_buffer_data_len, buf_len - total_read); // available data len in the buffer
-       memcpy( buf + total_read, fh->read_buffer, max_read);
-       total_read += max_read;
+   // read on-demand
+   SG_debug("read on-demand, offset %jd\n", offset );
+   if(fh->read_buffer == NULL) {
+       fh->read_buffer = SG_CALLOC( char, fh->block_size );
+       fh->read_buffer_offset = 0;
+       fh->read_buffer_data_len = 0;
+       fh->read_buffer_EOF = false;
    }
+
+   off_t req_offset = (offset / fh->block_size) * fh->block_size;
+
+   int read_len = UG_read_impl( core, route_metadata, fent, fh->read_buffer, fh->block_size, req_offset, handle_data );
+   if(read_len < 0) {
+       pthread_rwlock_unlock(&fh->read_buffer_lock);
+       return read_len;
+   }
+
+   if(read_len == 0) {
+       //EOF
+       // leave it dirty
+       //memset(fh->read_buffer, 0, fh->block_size);
+       fh->read_buffer_offset = req_offset;
+       fh->read_buffer_data_len = 0;
+       fh->read_buffer_EOF = true;
+       pthread_rwlock_unlock(&fh->read_buffer_lock);
+       return 0;
+   }
+   SG_debug("finished read on-demand, offset %jd\n", offset );
+
+   fh->read_buffer_offset = req_offset;
+   fh->read_buffer_data_len = read_len;
+   fh->read_buffer_EOF = false;
+
+   SG_debug("copying data from read buffer, offset %jd\n", offset );
+   off_t next_offset = fh->read_buffer_offset + fh->read_buffer_data_len;
+   off_t boffset = offset - fh->read_buffer_offset;
+
+   int max_read = MIN(fh->read_buffer_data_len - boffset, buf_len); // available data len in the buffer
+   memcpy( buf + total_read, fh->read_buffer + boffset, max_read);
+   total_read += max_read;
+   pthread_rwlock_unlock(&fh->read_buffer_lock);
+   SG_debug("finished copying data from read buffer, offset %jd\n", offset );
+
+   // start prefetch
+   UG_prefetch_impl(core, route_metadata, fent, next_offset, handle_data);
 
    return total_read;
 }
