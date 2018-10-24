@@ -478,6 +478,9 @@ int UG_file_handle_init( struct UG_file_handle* fh, struct UG_inode* inode, int 
 
    fh->prefetch_param = SG_CALLOC( struct UG_read_prefetch_param, 1 );
    fh->prefetch_buffer = NULL;
+
+   fh->download_connection_pool = md_download_connection_pool_new();
+   md_download_connection_pool_init(fh->download_connection_pool);
    return 0;
 }
 
@@ -514,6 +517,8 @@ int UG_file_handle_free( struct UG_file_handle* fh ) {
 
    pthread_rwlock_destroy(&fh->read_buffer_lock);
    pthread_rwlock_destroy(&fh->prefetch_lock);
+
+   md_download_connection_pool_free(fh->download_connection_pool);
 
    memset( fh, 0, sizeof(struct UG_file_handle) );
 

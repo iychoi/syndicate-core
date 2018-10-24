@@ -83,6 +83,8 @@ struct UG_file_handle {
    off_t second_read_buffer_offset;
    int second_read_buffer_data_len;
    bool second_read_buffer_EOF;
+
+   struct md_download_connection_pool* download_connection_pool;
 };
 
 

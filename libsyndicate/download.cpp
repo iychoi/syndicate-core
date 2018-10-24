@@ -113,6 +113,20 @@ struct md_download_loop {
    bool started;                           ///< Flag whether the download loop is in progress
 };
 
+// IYCHOI
+struct md_download_connection {
+    uint64_t gateway_id;
+    CURL* curl;
+    bool inited;
+    pthread_rwlock_t lock;
+};
+
+struct md_download_connection_pool {
+    md_download_connection_pool_map_t* connections;
+    pthread_rwlock_t lock;
+    bool inited;
+};
+// IYCHOI
 
 static void* md_downloader_main( void* arg );
 int md_downloader_finalize_download_context( struct md_download_context* dlctx, int curl_rc );
@@ -1103,8 +1117,8 @@ int md_download_context_wait( struct md_download_context* dlctx, int64_t timeout
    int rc = md_download_sem_wait( &dlctx->sem, timeout_ms );
 
    if( rc != 0 ) {
-      SG_error("md_download_sem_wait rc = %d\n", rc );
    }
+   SG_error("md_download_sem_wait rc = %d\n", rc );
    return rc;
 }
 
@@ -2499,3 +2513,187 @@ int md_bound_response_buffer_free( struct md_bound_response_buffer* brb ) {
 
    return 0;
 }
+
+
+
+// IYCHOI
+struct md_download_connection* md_download_connection_new() {
+    return SG_CALLOC( struct md_download_connection, 1 );
+}
+
+int md_download_connection_init( struct md_download_connection* dlconn, uint64_t gateway_id ) {
+    int rc = 0;
+
+    memset( dlconn, 0, sizeof(struct md_download_connection) );
+
+    rc = pthread_rwlock_init( &dlconn->lock, NULL );
+    if( rc != 0 ) {
+       return -rc;
+    }
+
+    dlconn->gateway_id = gateway_id;
+
+    // init CURL
+    dlconn->curl = curl_easy_init();
+    if( dlconn->curl == NULL ) {
+       return -ENOMEM;
+    }
+
+    dlconn->inited = true;
+    return 0;
+}
+
+int md_download_connection_free( struct md_download_connection* dlconn ) {
+    if( !dlconn->inited ) {
+       // not initialized
+       return -EINVAL;
+    }
+
+    // destroy
+    md_download_connection_wlock( dlconn );
+
+    dlconn->inited = false;
+
+    // uninit CURL
+    curl_easy_cleanup( dlconn->curl );
+
+    md_download_connection_unlock( dlconn );
+    pthread_rwlock_destroy( &dlconn->lock );
+
+    memset( dlconn, 0, sizeof(struct md_download_connection) );
+
+    return 0;
+}
+
+int md_download_connection_wlock( struct md_download_connection* dlconn ) {
+   return pthread_rwlock_wrlock( &dlconn->lock );
+}
+
+int md_download_connection_unlock( struct md_download_connection* dlconn ) {
+   return pthread_rwlock_unlock( &dlconn->lock );
+}
+
+CURL* md_download_connection_get_curl( struct md_download_connection* dlconn ) {
+    return dlconn->curl;
+}
+
+// connection pool
+struct md_download_connection_pool* md_download_connection_pool_new() {
+    return SG_CALLOC( struct md_download_connection_pool, 1 );
+}
+
+int md_download_connection_pool_init( struct md_download_connection_pool* dlcpool ) {
+    int rc = 0;
+
+    memset( dlcpool, 0, sizeof(struct md_download_connection_pool) );
+
+    rc = pthread_rwlock_init( &dlcpool->lock, NULL );
+    if( rc != 0 ) {
+       return -rc;
+    }
+
+    dlcpool->connections = SG_safe_new( md_download_connection_pool_map_t() );
+    if(dlcpool->connections == NULL) {
+        return -ENOMEM;
+    }
+
+    dlcpool->inited = true;
+    return 0;
+}
+
+int md_download_connection_pool_free( struct md_download_connection_pool* dlcpool ) {
+    if( !dlcpool->inited ) {
+       // not initialized
+       return -EINVAL;
+    }
+
+    // destroy
+    md_download_connection_pool_wlock( dlcpool );
+
+    if(dlcpool->connections != NULL) {
+        for( md_download_connection_pool_map_t::iterator itr = dlcpool->connections->begin(); itr != dlcpool->connections->end(); itr++ ) {
+            struct md_download_connection* dlconn = itr->second;
+
+            md_download_connection_free(dlconn);
+            SG_safe_free(dlconn);
+        }
+
+        dlcpool->connections->clear();
+        delete dlcpool->connections;
+        dlcpool->connections = NULL;
+    }
+
+    dlcpool->inited = false;
+
+    md_download_connection_pool_unlock( dlcpool );
+    pthread_rwlock_destroy( &dlcpool->lock );
+
+    memset( dlcpool, 0, sizeof(struct md_download_connection_pool) );
+
+    return 0;
+}
+
+int md_download_connection_pool_wlock( struct md_download_connection_pool* dlcpool ) {
+   return pthread_rwlock_wrlock( &dlcpool->lock );
+}
+
+int md_download_connection_pool_rlock( struct md_download_connection_pool* dlcpool ) {
+   return pthread_rwlock_rdlock( &dlcpool->lock );
+}
+
+int md_download_connection_pool_unlock( struct md_download_connection_pool* dlcpool ) {
+   return pthread_rwlock_unlock( &dlcpool->lock );
+}
+
+struct md_download_connection* md_download_connection_pool_get( struct md_download_connection_pool* dlcpool, uint64_t gateway_id) {
+
+    int rc = 0;
+    struct md_download_connection* dlconn = NULL;
+
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return NULL;
+    }
+
+    md_download_connection_pool_rlock( dlcpool );
+
+    md_download_connection_pool_map_t::iterator itr = dlcpool->connections->find( gateway_id );
+    if( itr != dlcpool->connections->end() ) {
+       // found!
+       dlconn = itr->second;
+
+       if(dlconn != NULL) {
+           SG_debug("reuse existing download connection for gateway id %" PRIX64 ", conn %p\n", gateway_id, dlconn);
+       }
+    }
+
+    if( dlconn == NULL) {
+        SG_debug("no download connection for gateway id %" PRIX64 " - create a new connection\n", gateway_id);
+        md_download_connection_pool_unlock( dlcpool );
+
+        // make one and put to the pool
+        dlconn = md_download_connection_new();
+        rc = md_download_connection_init( dlconn, gateway_id );
+        if( rc != 0) {
+            SG_safe_free(dlconn);
+            return NULL;
+        }
+
+        // write lock
+        md_download_connection_pool_wlock( dlcpool );
+        try {
+            (*dlcpool->connections)[ gateway_id ] = dlconn;
+        }
+        catch( bad_alloc& ba ) {
+            rc = -ENOMEM;
+            md_download_connection_pool_unlock( dlcpool );
+            return NULL;
+        }
+    }
+
+    md_download_connection_pool_unlock( dlcpool );
+
+    return dlconn;
+}
+// IYCHOI

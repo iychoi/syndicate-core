@@ -48,17 +48,24 @@ struct md_bound_response_buffer {
    md_response_buffer_t* rb;
 };
 
-// download set 
+// download set
 struct md_download_set;
 
 // download context
 struct md_download_context;
 
-// downloader 
+// downloader
 struct md_downloader;
 
-// download loop 
+// download loop
 struct md_download_loop;
+
+// download connection pool
+// IYCHOI
+struct md_download_connection;
+struct md_download_connection_pool;
+typedef map<uint64_t, struct md_download_connection*> md_download_connection_pool_map_t;
+// IYCHOI
 
 typedef map<CURL*, struct md_download_context*> md_downloading_map_t;
 typedef set<struct md_download_context*> md_pending_set_t;
@@ -71,9 +78,9 @@ typedef void (*md_download_curl_release_func)( CURL*, void* );
 #define MD_DOWNLOAD_FINISH                      0x1
 
 extern "C" {
-   
+
 // initialization and tear-down
-struct md_downloader* md_downloader_new(); 
+struct md_downloader* md_downloader_new();
 int md_downloader_init( struct md_downloader* dl, char const* name );
 int md_downloader_start( struct md_downloader* dl );
 int md_downloader_stop( struct md_downloader* dl );
@@ -88,7 +95,7 @@ int md_download_context_free2( struct md_download_context* dlctx, CURL** curl, c
 #define md_download_context_free( dlctx, curl ) md_download_context_free2( dlctx, curl, __FILE__, __LINE__ )
 int md_download_context_clear_set( struct md_download_context* dlctx );
 
-// reference counting 
+// reference counting
 int md_download_context_ref2( struct md_download_context* dlctx, char const* file, int line );
 #define md_download_context_ref( dlctx ) md_download_context_ref2( dlctx, __FILE__, __LINE__ )
 int md_download_context_unref2( struct md_download_context* dlctx, char const* file, int line );
@@ -101,7 +108,7 @@ int md_download_context_wait( struct md_download_context* dlctx, int64_t timeout
 int md_download_context_wait_any( struct md_download_set* dlset, int64_t timeout_ms );
 int md_download_context_cancel( struct md_downloader* dl, struct md_download_context* dlctx );
 
-// run a download synchronously 
+// run a download synchronously
 int md_download_context_run( struct md_download_context* dlctx );
 
 // get back data from a download context
@@ -113,7 +120,7 @@ int md_download_context_get_effective_url( struct md_download_context* dlctx, ch
 void* md_download_context_get_cls( struct md_download_context* dlctx );
 CURL* md_download_context_get_curl( struct md_download_context* dlctx );
 
-// setters 
+// setters
 void md_download_context_set_cls( struct md_download_context* dlctx, void* new_cls );
 
 // control
@@ -128,7 +135,7 @@ int md_HTTP_status_code_to_error_code( int status_code );
 // low-level primitve for waiting on a semaphore (that tries again if interrupted)
 int md_download_sem_wait( sem_t* sem, int64_t timeout_ms );
 
-// helper functions to initialize curl handles for downloading 
+// helper functions to initialize curl handles for downloading
 void md_init_curl_handle( struct md_syndicate_conf* conf, CURL* curl, char const* url, time_t query_time );
 
 // download/upload callbacks
@@ -152,15 +159,35 @@ bool md_download_loop_running( struct md_download_loop* dlloop );
 int md_download_loop_abort( struct md_download_loop* dlloop );
 int md_download_loop_cleanup( struct md_download_loop* dlloop, md_download_curl_release_func curl_release, void* release_cls );
 
-// iteration 
+// iteration
 struct md_download_context* md_download_loop_next_initialized( struct md_download_loop* dlloop, int *i );
 
-// error-parsing 
+// error-parsing
 int md_download_interpret_errors( int http_status, int curl_rc, int os_err );
 
 // bound response buffers
 int md_bound_response_buffer_init( struct md_bound_response_buffer* brb, off_t max_size );
 int md_bound_response_buffer_free( struct md_bound_response_buffer* brb );
+
+
+// IYCHOI
+// connection
+struct md_download_connection* md_download_connection_new();
+int md_download_connection_init( struct md_download_connection* dlconn, uint64_t gateway_id );
+int md_download_connection_free( struct md_download_connection* dlconn );
+int md_download_connection_wlock( struct md_download_connection* dlconn );
+int md_download_connection_unlock( struct md_download_connection* dlconn );
+CURL* md_download_connection_get_curl( struct md_download_connection* dlconn );
+
+// connection pool
+struct md_download_connection_pool* md_download_connection_pool_new();
+int md_download_connection_pool_init( struct md_download_connection_pool* dlcpool );
+int md_download_connection_pool_free( struct md_download_connection_pool* dlcpool );
+int md_download_connection_pool_wlock( struct md_download_connection_pool* dlcpool );
+int md_download_connection_pool_rlock( struct md_download_connection_pool* dlcpool );
+int md_download_connection_pool_unlock( struct md_download_connection_pool* dlcpool );
+struct md_download_connection* md_download_connection_pool_get( struct md_download_connection_pool* dlcpool, uint64_t gateway_id);
+
 
 }
 

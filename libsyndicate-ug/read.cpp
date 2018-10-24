@@ -400,7 +400,7 @@ int UG_read_download_gateway_list( struct SG_gateway* gateway, uint64_t coordina
  * @retval -ENOMEM Out of Memory
  * @retval -errno Failure to download
  */
-int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* block_requests, UG_dirty_block_map_t* blocks ) {
+int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* block_requests, UG_dirty_block_map_t* blocks, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
    struct ms_client* ms = SG_gateway_ms( gateway );
@@ -589,7 +589,7 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
          }
 
          // NOTE: extra download ref
-         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx );
+         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlcpool );
          SG_request_data_free( &reqdat );
 
          if( rc != 0 ) {
@@ -687,9 +687,9 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
          SG_debug("Finished with download context %p\n", dlctx);
          curl = NULL;
          rc = md_download_context_unref_free( dlctx, &curl );
-         if( curl != NULL ) {
-             curl_easy_cleanup( curl );
-         }
+         //if( curl != NULL ) {
+            // curl_easy_cleanup( curl );
+         //}
 
          /////////////////////////////////////////////////////
          char debug_buf[52];
@@ -995,13 +995,29 @@ int UG_read_blocks_local( struct SG_gateway* gateway, char const* fs_path, struc
  * @retval -ENOMEM Out of Memory
  * @retval -errno Download error
  */
-int UG_read_blocks_remote( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks ) {
+int UG_read_blocks_remote( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
+   struct md_download_connection_pool* temp_dlcpool = NULL;
 
-   rc = UG_read_download_blocks( gateway, fs_path, blocks_not_local, blocks );
+   if( dlcpool == NULL ) {
+       temp_dlcpool = md_download_connection_pool_new();
+       rc = md_download_connection_pool_init( temp_dlcpool );
+       if( rc != 0 ) {
+           return rc;
+       }
+
+       dlcpool = temp_dlcpool;
+   }
+
+   rc = UG_read_download_blocks( gateway, fs_path, blocks_not_local, blocks, dlcpool );
+
+    // delete
+    if( temp_dlcpool != NULL ) {
+        md_download_connection_pool_free(temp_dlcpool);
+    }
+
    if( rc != 0 ) {
-
       SG_error("UG_read_download_blocks( '%s' (%" PRIX64 ".%" PRId64 ") ) rc = %d\n", fs_path, SG_manifest_get_file_id( blocks_not_local ), SG_manifest_get_file_version( blocks_not_local ), rc );
       return rc;
    }
@@ -1055,7 +1071,7 @@ int UG_read_blocks( struct SG_gateway* gateway, char const* fs_path, struct UG_i
    if( SG_manifest_get_block_count( &blocks_to_download ) > 0 ) {
 
       // fetch remote
-      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, blocks );
+      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, blocks, NULL );
       if( rc != 0 ) {
 
          SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 " - %" PRIu64 "] ) rc = %d\n",
@@ -1224,7 +1240,7 @@ int UG_read_prefetch_impl( struct SG_gateway* gateway, char const* fs_path, char
 
       // fetch remote
       SG_debug("Download %zu blocks\n", SG_manifest_get_block_count( &blocks_to_download ));
-      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks );
+      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
       if( rc != 0 ) {
 
          SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
@@ -1814,7 +1830,7 @@ int UG_read_impl( struct fskit_core* core, struct fskit_route_metadata* route_me
 
       // fetch remote
       SG_debug("Download %zu blocks\n", SG_manifest_get_block_count( &blocks_to_download ));
-      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks );
+      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
       if( rc != 0 ) {
 
          SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",

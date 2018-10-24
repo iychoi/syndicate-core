@@ -503,7 +503,7 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
  * @retval 0 Success
  * @retval -ENOMEM Out of Memory
  */
-int SG_client_download_async_start( struct SG_gateway* gateway, struct md_download_loop* dlloop, struct md_download_context* dlctx, uint64_t chunk_id, char* url, off_t max_size, void* cls, void (*free_cls)(void*) ) {
+int SG_client_download_async_start( struct SG_gateway* gateway, struct md_download_loop* dlloop, struct md_download_context* dlctx, struct md_download_connection* dlconn, uint64_t chunk_id, char* url, off_t max_size, void* cls, void (*free_cls)(void*) ) {
 
    int rc = 0;
    CURL* curl = NULL;
@@ -519,13 +519,19 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
       return -ENOMEM;
    }
 
+   md_download_connection_wlock(dlconn);
+   curl = md_download_connection_get_curl(dlconn);
+   
+   /*
    curl = curl_easy_init();
    if( curl == NULL ) {
 
       SG_safe_free( reqcls );
       return -ENOMEM;
    }
+   */
 
+   // set URL
    md_init_curl_handle( conf, curl, url, conf->connect_timeout );
 
    // connect to caches
@@ -538,9 +544,9 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
       // failed
       SG_error("SG_gateway_impl_connect_cache('%s') rc = %d\n", url, rc );
 
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
       SG_safe_free( reqcls );
-
+      md_download_connection_unlock(dlconn);
       return rc;
    }
 
@@ -556,9 +562,9 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
 
       // failed
       SG_error("md_download_init('%s') rc = %d\n", url, rc );
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
       SG_safe_free( reqcls );
-
+      md_download_connection_unlock(dlconn);
       return rc;
    }
 
@@ -573,10 +579,10 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
       SG_error("md_download_loop_watch rc = %d\n", rc );
 
       md_download_context_free( dlctx, NULL );
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
 
       SG_safe_free( reqcls );
-
+      md_download_connection_unlock(dlconn);
       return rc;
    }
 
@@ -589,14 +595,14 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
 
       md_download_context_free( dlctx, NULL );
 
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
       SG_safe_free( reqcls );
-
+      md_download_connection_unlock(dlconn);
       return rc;
    }
 
    SG_debug("Running download %p in loop %p\n", dlctx, dlloop);
-
+   md_download_connection_unlock(dlconn);
    // started!
    return 0;
 }
@@ -632,9 +638,9 @@ void SG_client_download_async_cleanup( struct md_download_context* dlctx ) {
       SG_debug("Will free download context %p\n", dlctx );
       md_download_context_free( dlctx, &curl );
 
-      if( curl != NULL ) {
-         curl_easy_cleanup( curl );
-      }
+      //if( curl != NULL ) {
+      //  curl_easy_cleanup( curl );
+      //}
 
       // SG_client_request_cls_cleanup_and_free( reqcls );
    }
@@ -767,13 +773,14 @@ static void SG_client_get_block_async_cleanup( void* cls ) {
  * @retval -ENOMEM reqdat isn't a block request
  * @retval -ENOENT The remote gateway cannot be looked up
  */
-int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, struct md_download_loop* dlloop, struct md_download_context* dlctx ) {
+int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, struct md_download_loop* dlloop, struct md_download_context* dlctx, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
    char* block_url = NULL;
    struct ms_client* ms = SG_gateway_ms( gateway );
    uint64_t block_size = ms_client_get_volume_blocksize( ms );
    struct SG_request_data* reqdat_dup = NULL;
+   struct md_download_connection* dlconn = NULL;
 
    // sanity check
    if( !SG_request_is_block( reqdat ) ) {
@@ -805,8 +812,16 @@ int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_dat
       return rc;
    }
 
+   // get connection
+   dlconn = md_download_connection_pool_get( dlcpool, remote_gateway_id);
+   if( dlconn == NULL ) {
+       SG_safe_free( block_url );
+       SG_safe_free( reqdat_dup );
+       return -EINVAL;
+   }
+
    // GO GO GO!
-   rc = SG_client_download_async_start( gateway, dlloop, dlctx, reqdat->block_id, block_url, block_size * SG_MAX_BLOCK_LEN_MULTIPLIER, reqdat_dup, SG_client_get_block_async_cleanup );
+   rc = SG_client_download_async_start( gateway, dlloop, dlctx, dlconn, reqdat->block_id, block_url, block_size * SG_MAX_BLOCK_LEN_MULTIPLIER, reqdat_dup, SG_client_get_block_async_cleanup );
    if( rc != 0 ) {
 
       SG_error("SG_client_download_async_start('%s') rc = %d\n", block_url, rc );
@@ -2022,7 +2037,7 @@ int SG_client_request_TRUNCATE_setup( struct SG_gateway* gateway, SG_messages::R
 
 /**
  * @brief Make a signed RENAME request from an initialized reqdat.
- * 
+ *
  * @note The reqdat must be for a manifest
  * @retval 0 Success
  * @retval -EINVAL The reqdat is not for a manifest
@@ -2104,7 +2119,7 @@ int SG_client_request_RENAME_HINT_setup( struct SG_gateway* gateway, SG_messages
       return -ENOMEM;
    }
 
-   // include manifest 
+   // include manifest
    SG_messages::ManifestBlock* mblock = NULL;
 
    try {
