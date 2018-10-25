@@ -178,7 +178,8 @@ static int md_HTTP_default_send_response( struct MHD_Connection* connection, int
    }
 
    // avoid pipelining
-   rc = MHD_add_response_header( response, "Connection", "close" );
+   //rc = MHD_add_response_header( response, "Connection", "close" );
+   rc = MHD_add_response_header( response, "Connection", "keep-alive" );
    if( rc != MHD_YES ) {
 
       // OOM
