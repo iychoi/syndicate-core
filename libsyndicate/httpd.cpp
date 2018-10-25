@@ -363,7 +363,8 @@ static int md_HTTP_send_response( struct MHD_Connection* connection, struct md_H
 
    // avoid pipelining
    // (maybe fixes "stalled" resumes)
-   rc = MHD_add_response_header( resp->resp, MHD_HTTP_HEADER_CONNECTION, "close" );
+   rc = MHD_add_response_header( resp->resp, MHD_HTTP_HEADER_CONNECTION, "keep-alive" );
+   //rc = MHD_add_response_header( resp->resp, MHD_HTTP_HEADER_CONNECTION, "close" );
    if( rc != MHD_YES ) {
 
       // OOM
