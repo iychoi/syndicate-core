@@ -995,27 +995,11 @@ int UG_read_blocks_local( struct SG_gateway* gateway, char const* fs_path, struc
  * @retval -ENOMEM Out of Memory
  * @retval -errno Download error
  */
-int UG_read_blocks_remote( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks, struct md_download_connection_pool* dlcpool ) {
+int UG_read_blocks_remote2( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
-   struct md_download_connection_pool* temp_dlcpool = NULL;
-
-   if( dlcpool == NULL ) {
-       temp_dlcpool = md_download_connection_pool_new();
-       rc = md_download_connection_pool_init( temp_dlcpool );
-       if( rc != 0 ) {
-           return rc;
-       }
-
-       dlcpool = temp_dlcpool;
-   }
 
    rc = UG_read_download_blocks( gateway, fs_path, blocks_not_local, blocks, dlcpool );
-
-    // delete
-    if( temp_dlcpool != NULL ) {
-        md_download_connection_pool_free(temp_dlcpool);
-    }
 
    if( rc != 0 ) {
       SG_error("UG_read_download_blocks( '%s' (%" PRIX64 ".%" PRId64 ") ) rc = %d\n", fs_path, SG_manifest_get_file_id( blocks_not_local ), SG_manifest_get_file_version( blocks_not_local ), rc );
@@ -1031,6 +1015,10 @@ int UG_read_blocks_remote( struct SG_gateway* gateway, char const* fs_path, stru
    return rc;
 }
 
+
+int UG_read_blocks_remote( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks ) {
+    return UG_read_blocks_remote2(gateway, fs_path, blocks_not_local, blocks, NULL);
+}
 
 /**
  * @brief Read a set of blocks into RAM, given by the already-set-up *blocks
@@ -1071,7 +1059,7 @@ int UG_read_blocks( struct SG_gateway* gateway, char const* fs_path, struct UG_i
    if( SG_manifest_get_block_count( &blocks_to_download ) > 0 ) {
 
       // fetch remote
-      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, blocks, NULL );
+      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, blocks );
       if( rc != 0 ) {
 
          SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 " - %" PRIu64 "] ) rc = %d\n",
@@ -1141,7 +1129,7 @@ int UG_read_prefetch_impl( struct SG_gateway* gateway, char const* fs_path, char
    }
 
    // make sure the manifest is fresh
-   rc = UG_consistency_manifest_ensure_fresh( gateway, fs_path );
+   rc = UG_consistency_manifest_ensure_fresh2( gateway, fs_path, fh->download_connection_pool );
 
    file_id = UG_inode_file_id( inode );
    file_version = UG_inode_file_version( inode );
@@ -1240,10 +1228,10 @@ int UG_read_prefetch_impl( struct SG_gateway* gateway, char const* fs_path, char
 
       // fetch remote
       SG_debug("Download %zu blocks\n", SG_manifest_get_block_count( &blocks_to_download ));
-      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
+      rc = UG_read_blocks_remote2( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
       if( rc != 0 ) {
 
-         SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
+         SG_error("UG_read_blocks_remote2( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
                   file_id, file_version, (offset / block_size), ((offset + buf_len) / block_size), rc );
 
          num_read = rc;
@@ -1714,7 +1702,7 @@ int UG_read_impl( struct fskit_core* core, struct fskit_route_metadata* route_me
    }
 
    // make sure the manifest is fresh
-   rc = UG_consistency_manifest_ensure_fresh( gateway, fs_path );
+   rc = UG_consistency_manifest_ensure_fresh2( gateway, fs_path, fh->download_connection_pool );
 
    fskit_entry_rlock( fent );
 
@@ -1830,10 +1818,10 @@ int UG_read_impl( struct fskit_core* core, struct fskit_route_metadata* route_me
 
       // fetch remote
       SG_debug("Download %zu blocks\n", SG_manifest_get_block_count( &blocks_to_download ));
-      rc = UG_read_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
+      rc = UG_read_blocks_remote2( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
       if( rc != 0 ) {
 
-         SG_error("UG_read_blocks_remote( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
+         SG_error("UG_read_blocks_remote2( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
                   file_id, file_version, (offset / block_size), ((offset + buf_len) / block_size), rc );
 
          num_read = rc;

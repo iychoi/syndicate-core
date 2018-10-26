@@ -204,7 +204,7 @@ UG_consistency_inode_download_out:
  * @retval -EINVAL reqdat doesn't refer to a manifest
  * @retval -ENODATA if a manifest could not be fetched (i.e. no gateways online, all manifests obtained were invalid, etc.)
  */
-int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_id, uint64_t* gateway_ids, size_t num_gateway_ids, struct SG_manifest* manifest ) {
+int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_id, uint64_t* gateway_ids, size_t num_gateway_ids, struct SG_manifest* manifest, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
    SG_messages::Manifest mmsg;
@@ -242,7 +242,7 @@ int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_requ
       SG_debug("GET manifest %" PRIX64 ".%" PRId64 "/manifest.%ld.%ld from %" PRIu64 "\n",
             reqdat->file_id, reqdat->file_version, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec, gateway_ids[i] );
 
-      rc = SG_client_get_manifest( gateway, reqdat, coordinator_id, gateway_ids[i], manifest );
+      rc = SG_client_get_manifest( gateway, reqdat, coordinator_id, gateway_ids[i], manifest, dlcpool );
       if( rc != 0 ) {
 
          // not from this one
@@ -261,6 +261,10 @@ int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_requ
 }
 
 
+int UG_consistency_manifest_ensure_fresh( struct SG_gateway* gateway, char const* fs_path ) {
+    return UG_consistency_manifest_ensure_fresh2(gateway, fs_path, NULL);
+}
+
 /**
  * @brief Verify that a manifest is fresh.  Download and merge the latest manifest data for the referred inode if not.
  *
@@ -271,7 +275,7 @@ int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_requ
  * @retval -ENOMEM Out of Memory
  * @retval -ENODATA Could not fetch a manifest, but needed to
  */
-int UG_consistency_manifest_ensure_fresh( struct SG_gateway* gateway, char const* fs_path ) {
+int UG_consistency_manifest_ensure_fresh2( struct SG_gateway* gateway, char const* fs_path, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
    struct SG_manifest new_manifest;
@@ -399,7 +403,7 @@ int UG_consistency_manifest_ensure_fresh( struct SG_gateway* gateway, char const
    }
 
    // get the manifest
-   rc = UG_consistency_manifest_download( gateway, &reqdat, coordinator_id, gateway_ids_buf, num_gateway_ids, &new_manifest );
+   rc = UG_consistency_manifest_download( gateway, &reqdat, coordinator_id, gateway_ids_buf, num_gateway_ids, &new_manifest, dlcpool );
    SG_safe_free( gateway_ids_buf );
 
    if( rc != 0 ) {
@@ -684,7 +688,7 @@ int UG_consistency_inode_reload( struct SG_gateway* gateway, char const* fs_path
       }
       else if( size <= new_size ) {
 
-         // grew 
+         // grew
          SG_manifest_set_stale( UG_inode_manifest( inode ), true );
       }
 
@@ -697,11 +701,11 @@ int UG_consistency_inode_reload( struct SG_gateway* gateway, char const* fs_path
       // inode got renamed
       SG_debug("%" PRIX64 ": old name = '%s', new name = '%s'; do rename\n", inode_data->file_id, UG_inode_name_ref( inode ), inode_data->name );
 
-      // change inode name 
+      // change inode name
       rc = UG_inode_set_name( inode, inode_data->name );
       if( rc != 0 ) {
-         
-         // OOM 
+
+         // OOM
          return rc;
       }
 
@@ -1764,7 +1768,7 @@ int UG_consistency_inode_ensure_fresh_ex( struct SG_gateway* gateway, char const
       }
       SG_safe_free( fent_name );
       SG_safe_free( fs_dirpath );
-   
+
       SG_debug("Will NOT refresh %s (%" PRIX64 ")\n", fs_path, file_id);
       return 0;
    }
@@ -1835,7 +1839,7 @@ int UG_consistency_inode_ensure_fresh_ex( struct SG_gateway* gateway, char const
 
    // write-lock both the parent and child, so we can reload
    // if the given entry is already locked, then we have to assume that the
-   // parent is also write-locked 
+   // parent is also write-locked
    if( !locked ) {
        if( dent != NULL ) {
           SG_error("dent = %p\n", dent);
@@ -1986,12 +1990,12 @@ static int UG_consistency_dir_merge( struct SG_gateway* gateway, char const* fs_
          fskit_fullpath( fs_path_dir, ent->name, fs_path );
 
          fskit_entry_wlock( fent );
-         
+
          // is this entry still active?
          type = fskit_entry_get_type(fent);
          if( type == FSKIT_ENTRY_TYPE_DEAD || fskit_entry_get_deletion_in_progress(fent) ) {
              SG_debug("Child '%s' is dead already\n", ent->name);
-             
+
              rc = fskit_entry_try_garbage_collect(fs, fs_path, dent, fent);
              if( rc == 0 ) {
                 // not destroyed yet
@@ -2000,7 +2004,7 @@ static int UG_consistency_dir_merge( struct SG_gateway* gateway, char const* fs_
 
              fent = NULL;
          }
-         
+
          if( fent != NULL ) {
             // do we replace?
             // when was this entry created?
@@ -2080,15 +2084,15 @@ static int UG_consistency_dir_merge( struct SG_gateway* gateway, char const* fs_
    }
 
    for( uint64_t i = 0; i < num_existing; i++ ) {
-     
-      struct fskit_dir_entry* dirent = existing[i]; 
+
+      struct fskit_dir_entry* dirent = existing[i];
       if( strcmp(dirent->name, ".") == 0 || strcmp(dirent->name, "..") == 0 ) {
          continue;
       }
 
       // absent now?
       if( ent_listing_names.find(string(dirent->name)) == ent_listing_names.end() ) {
-        
+
          struct fskit_entry* child = fskit_dir_find_by_name(dent, dirent->name);
          if( child == NULL ) {
             SG_debug("Already absent: '%s'\n", dirent->name);
@@ -2105,9 +2109,9 @@ static int UG_consistency_dir_merge( struct SG_gateway* gateway, char const* fs_
          }
 
          fskit_entry_wlock(child);
-         
+
          rc = UG_deferred_remove(ug, fp, child);
-         
+
          fskit_entry_unlock(child);
 
          SG_safe_free(fp);

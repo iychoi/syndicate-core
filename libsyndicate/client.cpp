@@ -384,13 +384,15 @@ static int SG_client_get_manifest_curl( struct SG_gateway* gateway, struct SG_re
  * @return -EPROTO Any other HTTP 400-level error
  * @return -errno on socket- and recv-related errors
  */
-int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_gateway_id, uint64_t remote_gateway_id, struct SG_manifest* manifest ) {
+int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_gateway_id, uint64_t remote_gateway_id, struct SG_manifest* manifest, struct md_download_connection_pool* dlcpool ) {
 
    int rc = 0;
    char* manifest_url = NULL;
    CURL* curl = NULL;
    struct ms_client* ms = SG_gateway_ms( gateway );
    struct md_syndicate_conf* conf = SG_gateway_conf( gateway );
+   struct md_download_connection_pool* temp_dlcpool = NULL;
+   struct md_download_connection* dlconn = NULL;
 
    uint64_t volume_id = ms_client_get_volume_id( ms );
 
@@ -429,6 +431,30 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       return rc;
    }
 
+    if( dlcpool == NULL ) {
+        temp_dlcpool = md_download_connection_pool_new();
+        rc = md_download_connection_pool_init( temp_dlcpool );
+        if( rc != 0 ) {
+            return rc;
+        }
+
+        dlcpool = temp_dlcpool;
+    }
+
+   // get connection
+   dlconn = md_download_connection_pool_get( dlcpool, remote_gateway_id);
+   if( dlconn == NULL ) {
+       // delete
+        if( temp_dlcpool != NULL ) {
+            md_download_connection_pool_free(temp_dlcpool);
+        }
+       return -EINVAL;
+   }
+
+   md_download_connection_wlock(dlconn);
+   curl = md_download_connection_get_curl(dlconn);
+
+   /*
    curl = curl_easy_init();
 
    if( curl == NULL ) {
@@ -436,6 +462,7 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       SG_safe_free( manifest_url );
       return -ENOMEM;
    }
+   */
 
    // set CURL url, just in case
    md_init_curl_handle( conf, curl, manifest_url, conf->connect_timeout );
@@ -450,9 +477,14 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       // failed
       SG_error("SG_gateway_impl_connect_cache('%s') rc = %d\n", manifest_url, rc );
 
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
       SG_safe_free( manifest_url );
+      md_download_connection_unlock(dlconn);
 
+      // delete
+        if( temp_dlcpool != NULL ) {
+            md_download_connection_pool_free(temp_dlcpool);
+        }
       return rc;
    }
 
@@ -462,9 +494,14 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       // failed
       SG_error("SG_client_get_manifest_curl('%s') (wrote by %" PRIu64 ") rc = %d\n", manifest_url, coordinator_gateway_id, rc );
 
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
       SG_safe_free( manifest_url );
+      md_download_connection_unlock(dlconn);
 
+      // delete
+        if( temp_dlcpool != NULL ) {
+            md_download_connection_pool_free(temp_dlcpool);
+        }
       return rc;
    }
 
@@ -481,15 +518,25 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
                reqdat->fs_path, volume_id, coordinator_gateway_id, reqdat->file_id, reqdat->file_version, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec,
                SG_manifest_get_volume_id( manifest ), SG_manifest_get_file_id( manifest ), SG_manifest_get_file_version( manifest ), (long)SG_manifest_get_modtime_sec( manifest ), (long)SG_manifest_get_modtime_nsec( manifest ) );
 
-      curl_easy_cleanup( curl );
+      //curl_easy_cleanup( curl );
       SG_safe_free( manifest_url );
+      md_download_connection_unlock(dlconn);
 
+      // delete
+        if( temp_dlcpool != NULL ) {
+            md_download_connection_pool_free(temp_dlcpool);
+        }
       return -EBADMSG;
    }
 
-   curl_easy_cleanup( curl );
+   //curl_easy_cleanup( curl );
    SG_safe_free( manifest_url );
+   md_download_connection_unlock(dlconn);
 
+   // delete
+    if( temp_dlcpool != NULL ) {
+        md_download_connection_pool_free(temp_dlcpool);
+    }
    return rc;
 }
 
@@ -521,7 +568,7 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
 
    md_download_connection_wlock(dlconn);
    curl = md_download_connection_get_curl(dlconn);
-   
+
    /*
    curl = curl_easy_init();
    if( curl == NULL ) {
@@ -781,6 +828,7 @@ int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_dat
    uint64_t block_size = ms_client_get_volume_blocksize( ms );
    struct SG_request_data* reqdat_dup = NULL;
    struct md_download_connection* dlconn = NULL;
+   struct md_download_connection_pool* temp_dlcpool = NULL;
 
    // sanity check
    if( !SG_request_is_block( reqdat ) ) {
@@ -812,6 +860,16 @@ int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_dat
       return rc;
    }
 
+    if( dlcpool == NULL ) {
+        temp_dlcpool = md_download_connection_pool_new();
+        rc = md_download_connection_pool_init( temp_dlcpool );
+        if( rc != 0 ) {
+            return rc;
+        }
+
+        dlcpool = temp_dlcpool;
+    }
+
    // get connection
    dlconn = md_download_connection_pool_get( dlcpool, remote_gateway_id);
    if( dlconn == NULL ) {
@@ -822,6 +880,12 @@ int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_dat
 
    // GO GO GO!
    rc = SG_client_download_async_start( gateway, dlloop, dlctx, dlconn, reqdat->block_id, block_url, block_size * SG_MAX_BLOCK_LEN_MULTIPLIER, reqdat_dup, SG_client_get_block_async_cleanup );
+
+   // delete
+    if( temp_dlcpool != NULL ) {
+        md_download_connection_pool_free(temp_dlcpool);
+    }
+
    if( rc != 0 ) {
 
       SG_error("SG_client_download_async_start('%s') rc = %d\n", block_url, rc );

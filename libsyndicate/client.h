@@ -56,7 +56,7 @@ int SG_client_WRITE_data_set_routing_info( struct SG_client_WRITE_data* dat, uin
 int SG_client_WRITE_data_merge( struct SG_client_WRITE_data* dat, struct md_entry* ent );
 
 // GET operations
-int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, uint64_t coordinator_gateway_id, struct SG_manifest* manifest );
+int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, uint64_t coordinator_gateway_id, struct SG_manifest* manifest, struct md_download_connection_pool* dlcpool );
 int SG_client_parse_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_gateway_id, struct SG_chunk* serialized_manifest_chunk, struct SG_manifest* manifest );
 int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, struct md_download_loop* dlloop, struct md_download_context* dlctx, struct md_download_connection_pool* dlcpool );
 int SG_client_get_block_finish( struct SG_gateway* gateway, struct SG_manifest* manifest, struct md_download_context* dlctx, uint64_t* block_id, struct SG_chunk* block );

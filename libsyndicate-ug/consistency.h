@@ -38,23 +38,24 @@
 #include <fskit/fskit.h>
 
 extern "C" {
-   
-// go fetch an inode directoy from the MS 
+
+// go fetch an inode directoy from the MS
 int UG_consistency_inode_download( struct SG_gateway* gateway, uint64_t file_id, struct md_entry* ent );
 
 // get the manifest from one of a list of gateways
-int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_id, uint64_t* gateway_ids, size_t num_gateway_ids, struct SG_manifest* manifest );
+int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_id, uint64_t* gateway_ids, size_t num_gateway_ids, struct SG_manifest* manifest, struct md_download_connection_pool* dlcpool );
 
 // reload the path's-worth of metadata
 int UG_consistency_path_ensure_fresh( struct SG_gateway* gateway, char const* fs_path );
 
-// reload a directory's children 
+// reload a directory's children
 int UG_consistency_dir_ensure_fresh( struct SG_gateway* gateway, char const* fs_path );
 
 // reload an inode's manifest
 int UG_consistency_manifest_ensure_fresh( struct SG_gateway* gateway, char const* fs_path );
+int UG_consistency_manifest_ensure_fresh2( struct SG_gateway* gateway, char const* fs_path, struct md_download_connection_pool* dlcpool );
 
-// fetch the xattrs for an inode 
+// fetch the xattrs for an inode
 int UG_consistency_fetchxattrs( struct SG_gateway* gateway, uint64_t file_id, int64_t xattr_nonce, unsigned char* xattr_hash, fskit_xattr_set** ret_xattrs );
 
 // ensure a locally-cached inode is fresh
