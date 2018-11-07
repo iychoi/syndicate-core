@@ -115,6 +115,7 @@ struct md_download_loop {
 
 // IYCHOI
 struct md_download_connection {
+    struct md_download_connection_pool* pool;
     uint64_t gateway_id;
     CURL* curl;
     bool inited;
@@ -123,6 +124,8 @@ struct md_download_connection {
 
 struct md_download_connection_pool {
     md_download_connection_pool_map_t* connections;
+    void* user_data;
+    md_download_connection_pool_event_func event_func;
     pthread_rwlock_t lock;
     bool inited;
 };
@@ -2524,7 +2527,7 @@ struct md_download_connection* md_download_connection_new() {
     return SG_CALLOC( struct md_download_connection, 1 );
 }
 
-int md_download_connection_init( struct md_download_connection* dlconn, uint64_t gateway_id ) {
+int md_download_connection_init( struct md_download_connection* dlconn, struct md_download_connection_pool* dlcpool, uint64_t gateway_id ) {
     int rc = 0;
 
     memset( dlconn, 0, sizeof(struct md_download_connection) );
@@ -2534,6 +2537,7 @@ int md_download_connection_init( struct md_download_connection* dlconn, uint64_t
        return -rc;
     }
 
+    dlconn->pool = dlcpool;
     dlconn->gateway_id = gateway_id;
 
     // init CURL
@@ -2600,6 +2604,8 @@ int md_download_connection_pool_init( struct md_download_connection_pool* dlcpoo
         return -ENOMEM;
     }
 
+    dlcpool->user_data = NULL;
+    dlcpool->event_func = NULL;
     dlcpool->inited = true;
     return 0;
 }
@@ -2612,7 +2618,6 @@ int md_download_connection_pool_free( struct md_download_connection_pool* dlcpoo
 
     // destroy
     md_download_connection_pool_wlock( dlcpool );
-
     if(dlcpool->connections != NULL) {
         for( md_download_connection_pool_map_t::iterator itr = dlcpool->connections->begin(); itr != dlcpool->connections->end(); itr++ ) {
             struct md_download_connection* dlconn = itr->second;
@@ -2625,9 +2630,6 @@ int md_download_connection_pool_free( struct md_download_connection_pool* dlcpoo
         delete dlcpool->connections;
         dlcpool->connections = NULL;
     }
-
-    dlcpool->inited = false;
-
     md_download_connection_pool_unlock( dlcpool );
     pthread_rwlock_destroy( &dlcpool->lock );
 
@@ -2646,6 +2648,77 @@ int md_download_connection_pool_rlock( struct md_download_connection_pool* dlcpo
 
 int md_download_connection_pool_unlock( struct md_download_connection_pool* dlcpool ) {
    return pthread_rwlock_unlock( &dlcpool->lock );
+}
+
+int md_download_connection_pool_set_user_data( struct md_download_connection_pool* dlcpool, void* user_data) {
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return -EINVAL;
+    }
+
+    md_download_connection_pool_wlock( dlcpool );
+    dlcpool->user_data = user_data;
+    md_download_connection_pool_unlock( dlcpool );
+    return 0;
+}
+
+void* md_download_connection_pool_get_user_data( struct md_download_connection_pool* dlcpool ) {
+    void* user_data = NULL;
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return NULL;
+    }
+
+    md_download_connection_pool_rlock( dlcpool );
+    user_data = dlcpool->user_data;
+    md_download_connection_pool_unlock( dlcpool );
+    return user_data;
+}
+
+int md_download_connection_pool_set_event_func( struct md_download_connection_pool* dlcpool, md_download_connection_pool_event_func func) {
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return -EINVAL;
+    }
+
+    md_download_connection_pool_wlock( dlcpool );
+    dlcpool->event_func = func;
+    md_download_connection_pool_unlock( dlcpool );
+    return 0;
+}
+
+md_download_connection_pool_event_func md_download_connection_pool_get_event_func( struct md_download_connection_pool* dlcpool ) {
+    md_download_connection_pool_event_func func = NULL;
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return NULL;
+    }
+
+    md_download_connection_pool_rlock( dlcpool );
+    func = dlcpool->event_func;
+    md_download_connection_pool_unlock( dlcpool );
+    return func;
+}
+
+int md_download_connection_pool_call_event_func( struct md_download_connection_pool* dlcpool, uint32_t event_type, void* event_data) {
+    md_download_connection_pool_event_func func = NULL;
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return -EINVAL;
+    }
+
+    md_download_connection_pool_rlock( dlcpool );
+    func = dlcpool->event_func;
+    if(func != NULL) {
+        (*func)(dlcpool, event_type, event_data);
+    }
+    md_download_connection_pool_unlock( dlcpool );
+    return 0;
 }
 
 struct md_download_connection* md_download_connection_pool_get( struct md_download_connection_pool* dlcpool, uint64_t gateway_id) {
@@ -2677,7 +2750,7 @@ struct md_download_connection* md_download_connection_pool_get( struct md_downlo
 
         // make one and put to the pool
         dlconn = md_download_connection_new();
-        rc = md_download_connection_init( dlconn, gateway_id );
+        rc = md_download_connection_init( dlconn, dlcpool, gateway_id );
         if( rc != 0) {
             SG_safe_free(dlconn);
             return NULL;

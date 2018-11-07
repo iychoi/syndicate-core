@@ -590,6 +590,10 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
 
          // NOTE: extra download ref
          rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlcpool );
+
+         // wake up if there is a waiting thread
+         md_download_connection_pool_call_event_func(dlcpool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)(&gateway_ids[ gateway_idx ]));
+
          SG_request_data_free( &reqdat );
 
          if( rc != 0 ) {
@@ -1386,90 +1390,118 @@ UG_read_impl_fail:
 
       SG_debug("Read %" PRId64 " bytes (%s...)\n", num_read, debug_buf);
    }
-
+   md_download_connection_pool_call_event_func(fh->download_connection_pool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_FINISH_USE_CONNECTION, NULL);
    return num_read;
 }
 
-static void* _UG_prefetch_impl(void* param) {
-    struct UG_read_prefetch_param* prefetch_param = (struct UG_read_prefetch_param*) param;
+static void* UG_prefetch_task( void* param ) {
+    struct UG_read_prefetch* prefetch = (struct UG_read_prefetch*) param;
+    struct UG_read_prefetch_param* prefetch_param = NULL;
+    struct UG_read_buffer* prefetch_buffer = NULL;
+    struct SG_gateway* gateway = NULL;
+    char* fs_path = NULL;
+    off_t offset = 0;
+    struct UG_file_handle* fh = NULL;
 
-    struct SG_gateway* gateway = prefetch_param->gateway;
-    char const* fs_path = prefetch_param->fs_path;
-    off_t offset = prefetch_param->offset;
-    struct UG_file_handle* fh = prefetch_param->fh;
+    UG_read_prefetch_wlock(prefetch);
+    prefetch->prefetch_thread_running = true;
+    UG_read_prefetch_unlock(prefetch);
 
-    SG_debug("Prefetch (background) %s, offset %jd\n", fs_path, offset );
+    UG_read_prefetch_rlock(prefetch);
+    prefetch_param = prefetch->param;
+    prefetch_buffer = prefetch->buffer;
 
-    int read_len = UG_read_prefetch_impl( gateway, fs_path, fh->prefetch_buffer, fh->block_size, offset, fh );
+    UG_read_prefetch_param_rlock(prefetch_param);
+    gateway = prefetch_param->gateway;
+    fs_path = prefetch_param->fs_path;
+    offset = prefetch_param->offset;
+    fh = prefetch_param->fh;
+    UG_read_prefetch_param_unlock(prefetch_param);
 
+    SG_debug("Prefetch task %s, offset %jd\n", fs_path, offset);
+
+    UG_read_buffer_wlock(prefetch_buffer);
+    prefetch_buffer->offset = offset;
+    prefetch_buffer->data_len = 0;
+    prefetch_buffer->eof = false;
+
+    int read_len = UG_read_prefetch_impl(gateway, fs_path, prefetch_buffer->buffer, fh->block_size, offset, fh);
     if(read_len < 0) {
         // fail
-        pthread_rwlock_wrlock(&fh->read_buffer_lock);
-        fh->second_read_buffer_offset = offset;
-        fh->second_read_buffer_data_len = 0;
-        fh->second_read_buffer_EOF = false;
-        pthread_rwlock_unlock(&fh->read_buffer_lock);
-        return NULL;
-    }
-
-    if(read_len == 0) {
-        //EOF
-        pthread_rwlock_wrlock(&fh->read_buffer_lock);
-        fh->second_read_buffer_offset = offset;
-        fh->second_read_buffer_data_len = 0;
-        fh->second_read_buffer_EOF = true;
-        pthread_rwlock_unlock(&fh->read_buffer_lock);
+        prefetch_buffer->data_len = read_len;
     } else {
-        pthread_rwlock_wrlock(&fh->read_buffer_lock);
-        char* temp = fh->second_read_buffer;
-        fh->second_read_buffer = fh->prefetch_buffer;
-        fh->prefetch_buffer = temp;
-
-        fh->second_read_buffer_offset = offset;
-        fh->second_read_buffer_data_len = read_len;
-        fh->second_read_buffer_EOF = false;
-        pthread_rwlock_unlock(&fh->read_buffer_lock);
+        prefetch_buffer->data_len = read_len;
+        if(read_len < (int) fh->block_size) {
+            //EOF
+            prefetch_buffer->eof = true;
+        }
     }
+
+    UG_read_buffer_unlock(prefetch_buffer);
+    UG_read_prefetch_unlock(prefetch);
     return NULL;
 }
 
 int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* route_metadata, struct fskit_entry* fent, off_t offset, void* handle_data ) {
-
     int rc = 0;
     struct UG_file_handle* fh = (struct UG_file_handle*)handle_data;
+    int prefetch_tasks_in_queue = 0;
+    struct UG_read_prefetch* prefetch;
+    off_t new_start_offset;
+    int tasks_to_be_created;
+    uint64_t current_request_count;
 
-    pthread_rwlock_wrlock(&fh->prefetch_lock);
-    if(fh->prefetch_thread_running) {
-        // error
-        pthread_rwlock_unlock(&fh->prefetch_lock);
+    UG_read_prefetch_queue_clear_stale(fh->prefetch_queue, offset);
+
+    prefetch_tasks_in_queue = UG_read_prefetch_queue_len(fh->prefetch_queue);
+    if(prefetch_tasks_in_queue >= MAX_PREFETCH_LEN) {
+        // do not create too many
         return -1;
     }
 
-    // save to a param
-    struct SG_gateway* gateway = (struct SG_gateway*)fskit_core_get_user_data( core );
-    char const* fs_path = fskit_route_metadata_get_path( route_metadata );
-
-    SG_debug("Prefetch %s, offset %jd\n", fs_path, offset );
-
-    fh->prefetch_param->gateway = gateway;
-    // reuse if possible
-    if(fh->prefetch_param->fs_path == NULL) {
-        fh->prefetch_param->fs_path = strdup(fs_path);
-    }
-    fh->prefetch_param->offset = offset;
-    fh->prefetch_param->fh = fh;
-    if(fh->prefetch_buffer == NULL) {
-        fh->prefetch_buffer = SG_CALLOC( char, fh->block_size );
+    if(prefetch_tasks_in_queue > 0) {
+        prefetch = UG_read_prefetch_queue_front(fh->prefetch_queue);
+        UG_read_prefetch_rlock(prefetch);
+        UG_read_prefetch_param_rlock(prefetch->param);
+        new_start_offset = prefetch->param->offset + (prefetch_tasks_in_queue * fh->block_size);
+        UG_read_prefetch_param_unlock(prefetch->param);
+        UG_read_prefetch_unlock(prefetch);
+    } else {
+        new_start_offset = offset;
     }
 
-    rc = pthread_create(&fh->prefetch_thread, NULL, _UG_prefetch_impl, (void*)fh->prefetch_param);
-    if(rc != 0) {
-        pthread_rwlock_unlock(&fh->prefetch_lock);
-        return rc;
-    }
+    tasks_to_be_created = MAX_PREFETCH_LEN - prefetch_tasks_in_queue;
 
-    fh->prefetch_thread_running = true;
-    pthread_rwlock_unlock(&fh->prefetch_lock);
+    struct SG_gateway* gateway = (struct SG_gateway*)fskit_core_get_user_data(core);
+    char const* fs_path = fskit_route_metadata_get_path(route_metadata);
+
+    for(int i=0;i<tasks_to_be_created;i++) {
+        off_t task_offset = new_start_offset + (i * fh->block_size);
+        SG_debug("Create a prefetch task %s, offset %jd\n", fs_path, task_offset);
+
+        // save params
+        struct UG_read_prefetch* new_prefetch = UG_read_prefetch_new();
+        UG_read_prefetch_init(new_prefetch, fh->block_size);
+        new_prefetch->param->gateway = gateway;
+        new_prefetch->param->fs_path = strdup(fs_path);
+        new_prefetch->param->offset = task_offset;
+        new_prefetch->param->fh = fh;
+
+        rc = pthread_create(&new_prefetch->prefetch_thread, NULL, UG_prefetch_task, (void*)new_prefetch);
+        if(rc != 0) {
+            UG_read_prefetch_free(new_prefetch);
+            SG_safe_free(new_prefetch);
+            return rc;
+        }
+
+        SG_debug("Push a prefetch task to the queue %s, offset %jd\n", fs_path, task_offset);
+        UG_read_prefetch_queue_push(fh->prefetch_queue, new_prefetch);
+
+        // wait for http request and proceed
+        SG_debug("Wait a prefetch request %s, offset %jd\n", fs_path, task_offset);
+        UG_read_prefetch_queue_wait(fh->prefetch_queue, new_prefetch);
+        SG_debug("Wake up a prefetch request %s, offset %jd\n", fs_path, task_offset);
+    }
     return 0;
 }
 
@@ -1477,8 +1509,12 @@ int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* rout
  * buffer read for performance
  */
 int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata* route_metadata, struct fskit_entry* fent, char* buf, size_t buf_len, off_t offset, void* handle_data ) {
-
    struct UG_file_handle* fh = (struct UG_file_handle*)handle_data;
+   int total_read = 0;
+   int read = 0;
+   int rc = 0;
+   bool eof = false;
+   off_t req_offset = 0;
 
    if(buf_len == 0 || offset < 0) {
        return 0;
@@ -1486,154 +1522,91 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
 
    // load block size
    if(fh->block_size == 0) {
-       struct SG_gateway* gateway = (struct SG_gateway*)fskit_core_get_user_data( core );
-       struct ms_client* ms = SG_gateway_ms( gateway );
-       uint64_t block_size = ms_client_get_volume_blocksize( ms );
+       struct SG_gateway* gateway = (struct SG_gateway*)fskit_core_get_user_data(core);
+       struct ms_client* ms = SG_gateway_ms(gateway);
+       uint64_t block_size = ms_client_get_volume_blocksize(ms);
 
        fh->block_size = block_size;
    }
 
-   int total_read = 0;
+   // we init read_buffer here because we don't know block_size at other places
+   if(fh->read_buffer == NULL) {
+       fh->read_buffer = UG_read_buffer_new();
+       UG_read_buffer_init(fh->read_buffer, fh->block_size);
+   }
 
-   SG_debug("read from read buffer, offset %jd\n", offset );
-   pthread_rwlock_rdlock(&fh->read_buffer_lock);
+   // start reading
+   SG_debug("read from read buffer, offset %jd\n", offset);
    // has buffered data?
-   if(fh->read_buffer_offset <= offset && (off_t) (fh->read_buffer_offset + fh->read_buffer_data_len) > offset) {
-       if(fh->read_buffer_data_len > 0 && !fh->read_buffer_EOF) {
-           // use buffered data
-           off_t boffset = offset - fh->read_buffer_offset;
-           int max_read = MIN(fh->read_buffer_data_len - boffset, buf_len); // available data len in the buffer
-           memcpy( buf + total_read, fh->read_buffer + boffset, max_read);
-           total_read += max_read;
+   read = UG_read_buffer_copy_data(fh->read_buffer, buf, buf_len, offset, &eof);
+   if(read >= 0) {
+       SG_debug("finished read from read buffer, offset %jd, len %d\n", offset, read);
+       total_read += read;
 
-           pthread_rwlock_unlock(&fh->read_buffer_lock);
-           SG_debug("finished read from read buffer, offset %jd\n", offset );
+       if(total_read >= (int) buf_len || eof) {
+           // read done
            return total_read;
-       } else if(fh->read_buffer_EOF) {
-           pthread_rwlock_unlock(&fh->read_buffer_lock);
-           SG_debug("finished read from read buffer (EOF), offset %jd\n", offset );
-           return 0;
        }
    }
-   pthread_rwlock_unlock(&fh->read_buffer_lock);
 
    // data is not buffered in the read buffer
    // check if there is prefetched data
-   SG_debug("checking prefetch thread %p\n", &fh->prefetch_thread);
-   pthread_rwlock_wrlock(&fh->prefetch_lock);
-   if(fh->prefetch_thread_running) {
-       // prefetch thread is running
-       SG_debug("joining the prefetch thread %p\n", &fh->prefetch_thread);
-       pthread_join(fh->prefetch_thread, NULL);
-
-       fh->prefetch_thread_running = false;
-
-       fh->prefetch_param->gateway = NULL;
-       //fh->prefetch_param->fs_path = NULL; // reuse
-       fh->prefetch_param->offset = 0;
-       fh->prefetch_param->fh = NULL;
-       SG_debug("prefetch thread is joined %p\n", &fh->prefetch_thread);
-   }
-   pthread_rwlock_unlock(&fh->prefetch_lock);
-
-   SG_debug("read from second read buffer, offset %jd\n", offset );
-   pthread_rwlock_wrlock(&fh->read_buffer_lock);
-   if(fh->second_read_buffer_offset <= offset && (off_t) (fh->second_read_buffer_offset + fh->second_read_buffer_data_len) > offset) {
-       if(fh->second_read_buffer_data_len > 0 && !fh->second_read_buffer_EOF) {
-           // use second buffered data
-           // swap
-           SG_debug("swapping the prefetch buffer, offset %jd\n", fh->second_read_buffer_offset);
-
-           char* temp_buffer = fh->second_read_buffer;
-           fh->second_read_buffer = fh->read_buffer;
-           fh->read_buffer = temp_buffer;
-
-           fh->read_buffer_offset = fh->second_read_buffer_offset;
-           fh->read_buffer_data_len = fh->second_read_buffer_data_len;
-           fh->read_buffer_EOF = fh->second_read_buffer_EOF;
-           fh->second_read_buffer_offset = 0;
-           fh->second_read_buffer_data_len = 0;
-
+   SG_debug("checking and joining prefetch threads %p\n", fh->prefetch_queue);
+   rc = UG_read_prefetch_queue_join_first(fh->prefetch_queue);
+   if(rc == 0) {
+       SG_debug("read from prefetch buffers, offset %jd\n", offset + total_read);
+       rc = UG_read_prefetch_queue_retrieve_data(fh->prefetch_queue, fh->read_buffer, offset + total_read);
+       if(rc == 0) {
            // re-read
-           SG_debug("re-read from read buffer, offset %jd\n", offset );
-           off_t next_offset = fh->read_buffer_offset + fh->read_buffer_data_len;
+           read = UG_read_buffer_copy_data(fh->read_buffer, buf + total_read, buf_len - total_read, offset + total_read, &eof);
+           if(read >= 0) {
+               SG_debug("finished read from read buffer (second), offset %jd, len %d\n", offset + total_read, read );
+               req_offset = UG_read_prefetch_block_offset(offset + total_read, fh->block_size);
+               // req_offset = start offset of the current block
+               total_read += read;
 
-           off_t boffset = offset - fh->read_buffer_offset;
-           int max_read = MIN(fh->read_buffer_data_len - boffset, buf_len); // available data len in the buffer
-           memcpy( buf + total_read, fh->read_buffer + boffset, max_read);
-           total_read += max_read;
-
-           pthread_rwlock_unlock(&fh->read_buffer_lock);
-
-           // start prefetch
-           UG_prefetch_impl(core, route_metadata, fent, next_offset, handle_data);
-           SG_debug("finished re-read from read buffer, offset %jd\n", offset );
-           return total_read;
-       } else if(fh->second_read_buffer_EOF) {
-           SG_debug("swapping the prefetch buffer, offset %jd\n", fh->second_read_buffer_offset);
-
-           char* temp_buffer = fh->second_read_buffer;
-           fh->second_read_buffer = fh->read_buffer;
-           fh->read_buffer = temp_buffer;
-
-           fh->read_buffer_offset = fh->second_read_buffer_offset;
-           fh->read_buffer_data_len = fh->second_read_buffer_data_len;
-           fh->read_buffer_EOF = fh->second_read_buffer_EOF;
-           fh->second_read_buffer_offset = 0;
-           fh->second_read_buffer_data_len = 0;
-
-           pthread_rwlock_unlock(&fh->read_buffer_lock);
-           SG_debug("finished re-read from read buffer (EOF), offset %jd\n", offset );
-           return 0;
+               if(total_read >= (int) buf_len || eof) {
+                   // read done
+                   if(!eof) {
+                       // launch prefetching
+                       req_offset += fh->block_size;
+                       UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data);
+                   }
+                   return total_read;
+               }
+           }
        }
    }
 
    // read on-demand
-   SG_debug("read on-demand, offset %jd\n", offset );
-   if(fh->read_buffer == NULL) {
-       fh->read_buffer = SG_CALLOC( char, fh->block_size );
-       fh->read_buffer_offset = 0;
-       fh->read_buffer_data_len = 0;
-       fh->read_buffer_EOF = false;
+   SG_debug("read on-demand, offset %jd\n", offset + total_read);
+   req_offset = UG_read_prefetch_block_offset(offset + total_read, fh->block_size);
+   UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data);
+
+   SG_debug("joining prefetch threads again %p\n", fh->prefetch_queue);
+   rc = UG_read_prefetch_queue_join_first(fh->prefetch_queue);
+   if(rc == 0) {
+       SG_debug("read from prefetch buffers, offset %jd\n", offset + total_read);
+       rc = UG_read_prefetch_queue_retrieve_data(fh->prefetch_queue, fh->read_buffer, offset + total_read);
+       if(rc == 0) {
+           // re-read
+           read = UG_read_buffer_copy_data(fh->read_buffer, buf + total_read, buf_len - total_read, offset + total_read, &eof);
+           if(read >= 0) {
+               SG_debug("finished read from read buffer (second), offset %jd, len %d\n", offset + total_read, read );
+               req_offset = UG_read_prefetch_block_offset(offset + total_read, fh->block_size);
+               // req_offset = start offset of the current block
+               total_read += read;
+
+               // read done
+               if(!eof) {
+                   // launch prefetching
+                   req_offset += fh->block_size;
+                   UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data);
+               }
+               return total_read;
+           }
+       }
    }
-
-   off_t req_offset = (offset / fh->block_size) * fh->block_size;
-
-   int read_len = UG_read_impl( core, route_metadata, fent, fh->read_buffer, fh->block_size, req_offset, handle_data );
-   if(read_len < 0) {
-       pthread_rwlock_unlock(&fh->read_buffer_lock);
-       return read_len;
-   }
-
-   if(read_len == 0) {
-       //EOF
-       // leave it dirty
-       //memset(fh->read_buffer, 0, fh->block_size);
-       fh->read_buffer_offset = req_offset;
-       fh->read_buffer_data_len = 0;
-       fh->read_buffer_EOF = true;
-       pthread_rwlock_unlock(&fh->read_buffer_lock);
-       return 0;
-   }
-   SG_debug("finished read on-demand, offset %jd\n", offset );
-
-   fh->read_buffer_offset = req_offset;
-   fh->read_buffer_data_len = read_len;
-   fh->read_buffer_EOF = false;
-
-   SG_debug("copying data from read buffer, offset %jd\n", offset );
-   off_t next_offset = fh->read_buffer_offset + fh->read_buffer_data_len;
-   off_t boffset = offset - fh->read_buffer_offset;
-
-   int max_read = MIN(fh->read_buffer_data_len - boffset, buf_len); // available data len in the buffer
-   memcpy( buf + total_read, fh->read_buffer + boffset, max_read);
-   total_read += max_read;
-   pthread_rwlock_unlock(&fh->read_buffer_lock);
-   SG_debug("finished copying data from read buffer, offset %jd\n", offset );
-
-   // start prefetch
-   UG_prefetch_impl(core, route_metadata, fent, next_offset, handle_data);
-
    return total_read;
 }
 

@@ -462,25 +462,16 @@ int UG_file_handle_init( struct UG_file_handle* fh, struct UG_inode* inode, int 
    fh->flags = flags;
 
    fh->block_size = 0;
+
    fh->read_buffer = NULL;
-   fh->read_buffer_offset = 0;
-   fh->read_buffer_data_len = 0;
-   fh->read_buffer_EOF = false;
 
-   fh->second_read_buffer = NULL;
-   fh->second_read_buffer_offset = 0;
-   fh->second_read_buffer_data_len = 0;
-   fh->second_read_buffer_EOF = false;
-
-   fh->prefetch_thread_running = false;
-   pthread_rwlock_init(&fh->read_buffer_lock, NULL);
-   pthread_rwlock_init(&fh->prefetch_lock, NULL);
-
-   fh->prefetch_param = SG_CALLOC( struct UG_read_prefetch_param, 1 );
-   fh->prefetch_buffer = NULL;
+   fh->prefetch_queue = UG_read_prefetch_queue_new();
+   UG_read_prefetch_queue_init(fh->prefetch_queue);
 
    fh->download_connection_pool = md_download_connection_pool_new();
    md_download_connection_pool_init(fh->download_connection_pool);
+   md_download_connection_pool_set_user_data(fh->download_connection_pool, fh);
+   md_download_connection_pool_set_event_func(fh->download_connection_pool, &UG_read_prefetch_download_connection_pool_event_handler);
    return 0;
 }
 
@@ -491,40 +482,21 @@ int UG_file_handle_init( struct UG_file_handle* fh, struct UG_inode* inode, int 
  * @retval -ENOMEM Out of Memory
  */
 int UG_file_handle_free( struct UG_file_handle* fh ) {
-
-    // check if thread is joined
-    pthread_rwlock_wrlock(&fh->prefetch_lock);
-    if(fh->prefetch_thread_running) {
-        pthread_join(fh->prefetch_thread, NULL);
-
-        fh->prefetch_thread_running = false;
-
-        fh->prefetch_param->gateway = NULL;
-        SG_safe_free(fh->prefetch_param->fs_path);
-        fh->prefetch_param->fs_path = NULL;
-        fh->prefetch_param->offset = 0;
-        fh->prefetch_param->fh = NULL;
+    if(fh->read_buffer) {
+        UG_read_buffer_free(fh->read_buffer);
+        SG_safe_free(fh->read_buffer);
     }
-    pthread_rwlock_unlock(&fh->prefetch_lock);
 
-   pthread_rwlock_wrlock(&fh->read_buffer_lock);
-   SG_safe_free(fh->read_buffer);
-   SG_safe_free(fh->second_read_buffer);
-   pthread_rwlock_unlock(&fh->read_buffer_lock);
+    UG_read_prefetch_queue_free(fh->prefetch_queue);
+    SG_safe_free(fh->prefetch_queue);
 
-   SG_safe_free(fh->prefetch_param);
-   SG_safe_free(fh->prefetch_buffer);
+    md_download_connection_pool_free(fh->download_connection_pool);
+    SG_safe_free(fh->download_connection_pool);
 
-   pthread_rwlock_destroy(&fh->read_buffer_lock);
-   pthread_rwlock_destroy(&fh->prefetch_lock);
+    memset( fh, 0, sizeof(struct UG_file_handle) );
 
-   md_download_connection_pool_free(fh->download_connection_pool);
-
-   memset( fh, 0, sizeof(struct UG_file_handle) );
-
-   return 0;
+    return 0;
 }
-
 
 /**
  * @brief Export all non-builtin xattrs for an inode.

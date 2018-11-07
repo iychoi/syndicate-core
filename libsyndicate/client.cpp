@@ -1211,8 +1211,6 @@ int SG_client_get_block_finish( struct SG_gateway* gateway, struct SG_manifest* 
    char* block_buf = NULL;
    off_t block_len = 0;
    uint64_t block_data_offset = 0;
-   struct ms_client* ms = SG_gateway_ms( gateway );
-   uint64_t blocksize = ms_client_get_volume_blocksize( ms );
 
    struct SG_request_data* reqdat = NULL;
    struct SG_chunk block_chunk;

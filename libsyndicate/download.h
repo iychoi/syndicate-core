@@ -65,6 +65,11 @@ struct md_download_loop;
 struct md_download_connection;
 struct md_download_connection_pool;
 typedef map<uint64_t, struct md_download_connection*> md_download_connection_pool_map_t;
+typedef void (*md_download_connection_pool_event_func)(struct md_download_connection_pool* dlcpool, uint32_t event_type, void* event_data);
+
+#define MD_DOWNLOAD_CONNECTION_POOL_EVENT_GET_CONNECTION 0x1
+#define MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST 0x2
+#define MD_DOWNLOAD_CONNECTION_POOL_EVENT_FINISH_USE_CONNECTION 0x4
 // IYCHOI
 
 typedef map<CURL*, struct md_download_context*> md_downloading_map_t;
@@ -173,7 +178,7 @@ int md_bound_response_buffer_free( struct md_bound_response_buffer* brb );
 // IYCHOI
 // connection
 struct md_download_connection* md_download_connection_new();
-int md_download_connection_init( struct md_download_connection* dlconn, uint64_t gateway_id );
+int md_download_connection_init( struct md_download_connection* dlconn, struct md_download_connection_pool* dlcpool, uint64_t gateway_id );
 int md_download_connection_free( struct md_download_connection* dlconn );
 int md_download_connection_wlock( struct md_download_connection* dlconn );
 int md_download_connection_unlock( struct md_download_connection* dlconn );
@@ -187,7 +192,11 @@ int md_download_connection_pool_wlock( struct md_download_connection_pool* dlcpo
 int md_download_connection_pool_rlock( struct md_download_connection_pool* dlcpool );
 int md_download_connection_pool_unlock( struct md_download_connection_pool* dlcpool );
 struct md_download_connection* md_download_connection_pool_get( struct md_download_connection_pool* dlcpool, uint64_t gateway_id);
-
+int md_download_connection_pool_set_user_data( struct md_download_connection_pool* dlcpool, void* user_data);
+void* md_download_connection_pool_get_user_data( struct md_download_connection_pool* dlcpool );
+int md_download_connection_pool_set_event_func( struct md_download_connection_pool* dlcpool, md_download_connection_pool_event_func func);
+md_download_connection_pool_event_func md_download_connection_pool_get_event_func( struct md_download_connection_pool* dlcpool );
+int md_download_connection_pool_call_event_func( struct md_download_connection_pool* dlcpool, uint32_t event_type, void* event_data);
 
 }
 
