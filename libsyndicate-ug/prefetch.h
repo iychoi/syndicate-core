@@ -36,7 +36,7 @@
 #include "inode.h"
 #include "block.h"
 
-#define MAX_PREFETCH_LEN 1
+#define MAX_PREFETCH_LEN 2
 
 struct UG_read_buffer {
     char* buffer;

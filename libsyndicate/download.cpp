@@ -234,9 +234,6 @@ int md_downloader_init( struct md_downloader* dl, char const* name ) {
 
    dl->curlm = curl_multi_init();
 
-   //IYCHOI
-   //curl_multi_setopt(dl->curlm, CURLMOPT_PIPELINING, 1L);
-
    dl->name = SG_strdup_or_null( name );
    dl->downloading = SG_safe_new( md_downloading_map_t() );
    dl->pending = SG_safe_new( md_pending_set_t() );

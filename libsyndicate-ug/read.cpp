@@ -770,6 +770,418 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
    return rc;
 }
 
+/**
+ * @brief Download multiple blocks at once.
+ * @param[out] *blocks Requested blocks from the block_requests manifest
+ * @retval Success
+ * @retval -EINVAL Blocks has reserved chunk data that is unallocated, or does not have enough space
+ * @retval -ENOMEM Out of Memory
+ * @retval -errno Failure to download
+ */
+int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* block_requests, UG_dirty_block_map_t* blocks, struct md_download_connection_pool* dlcpool ) {
+
+   int rc = 0;
+   struct ms_client* ms = SG_gateway_ms( gateway );
+
+   uint64_t* gateway_ids = NULL;
+   size_t num_gateway_ids = 0;
+
+   struct md_downloader* dl = NULL;
+   struct md_download_context* dlctx = NULL;
+   struct md_download_loop* dlloop = NULL;
+
+   struct SG_request_data reqdat;
+
+   uint64_t block_id = 0;
+   uint64_t next_block_id = 0;
+
+   struct SG_chunk next_block;
+   struct SG_manifest_block* block_info = NULL;
+
+   uint64_t max_connections = 10;
+
+   UG_block_gateway_map_t block_gateway_idx;        // map block ID to the index into gateway_ids for the next gateway to try
+   int gateway_idx = 0;
+   SG_manifest_block_iterator itr;
+   CURL* curl = NULL;
+   uint64_t block_size = ms_client_get_volume_blocksize( ms );
+
+   set<uint64_t> blocks_in_flight;                  // set of blocks being downloaded right now (keyed by ID)
+   bool cycled_through = false;                     // set to true once the maximum number of in-flight blocks has been started
+
+   memset( &next_block, 0, sizeof(struct SG_chunk) );
+
+   next_block.len = block_size;
+   next_block.data = SG_CALLOC( char, block_size );
+   if( next_block.data == NULL ) {
+      return -ENOMEM;
+   }
+
+   // sanity check--every block in blocks that we will request must have a RAM-mapped buffer
+   for( SG_manifest_block_iterator itr = SG_manifest_block_iterator_begin(block_requests); itr != SG_manifest_block_iterator_end(block_requests); itr++ ) {
+      uint64_t block_id = SG_manifest_block_iterator_id(itr);
+      UG_dirty_block_map_t::iterator block_itr = blocks->find(block_id);
+      struct UG_dirty_block* block = NULL;
+
+      if( block_itr == blocks->end() ) {
+         SG_error("BUG: no buffer for %" PRIX64 "[%" PRIu64 ".%" PRId64 "]\n",
+                  SG_manifest_get_file_id(block_requests), block_id, UG_dirty_block_version(block) );
+
+         exit(1);
+
+      }
+
+      block = &block_itr->second;
+
+      if( !UG_dirty_block_in_RAM(block) ) {
+         SG_error("BUG: block %" PRIX64 "[%" PRIu64 ".%" PRId64 "] not RAM-mapped\n",
+                  SG_manifest_get_file_id(block_requests), block_id, UG_dirty_block_version(block) );
+
+         exit(1);
+      }
+
+      if( (unsigned)UG_dirty_block_buf(block)->len < block_size ) {
+         SG_error("BUG: block %" PRIX64 "[%" PRIu64 ".%" PRId64 "] has insufficient space (%zu)\n",
+                  SG_manifest_get_file_id(block_requests), block_id, UG_dirty_block_version(block), UG_dirty_block_buf(block)->len );
+
+         exit(1);
+      }
+   }
+
+   // what are the gateways?
+   rc = UG_read_download_gateway_list( gateway, SG_manifest_get_coordinator( block_requests ), &gateway_ids, &num_gateway_ids );
+   if( rc != 0 ) {
+
+      // OOM
+      SG_chunk_free( &next_block );
+      return rc;
+   }
+
+   // seed block <--> gateway index
+   for( SG_manifest_block_iterator seed_itr = SG_manifest_block_iterator_begin( block_requests ); seed_itr != SG_manifest_block_iterator_end( block_requests ); seed_itr++ ) {
+
+      try {
+         block_id = SG_manifest_block_iterator_id( seed_itr );
+         block_gateway_idx[ block_id ] = 0;
+      }
+      catch( bad_alloc& ba ) {
+
+         SG_safe_free( gateway_ids );
+         SG_chunk_free( &next_block );
+         return -ENOMEM;
+      }
+   }
+
+   dl = md_downloader_new();
+   if( dl == NULL ) {
+      SG_safe_free( gateway_ids );
+      SG_chunk_free( &next_block );
+      return -ENOMEM;
+   }
+
+   // set up the downloader
+   rc = md_downloader_init( dl, "gateway_prefetch" );
+   if( rc != 0 ) {
+      SG_error("md_downloader_init('gateway_prefetch') rc = %d\n", rc );
+      SG_safe_free( gateway_ids );
+      SG_chunk_free( &next_block );
+      return rc;
+   }
+
+   rc = md_downloader_start( dl );
+   if( rc != 0 ) {
+      SG_error("md_downloader_start('gateway_prefetch') rc = %d\n", rc );
+      SG_safe_free( gateway_ids );
+      SG_chunk_free( &next_block );
+      return rc;
+   }
+
+   // prepare to download blocks
+   dlloop = md_download_loop_new();
+   if( dlloop == NULL ) {
+      SG_safe_free( dl );
+      SG_safe_free( gateway_ids );
+      SG_chunk_free( &next_block );
+      return -ENOMEM;
+   }
+
+   //rc = md_download_loop_init( dlloop, SG_gateway_dl( gateway ), MIN( max_connections, SG_manifest_get_block_count( block_requests ) ) );
+   rc = md_download_loop_init( dlloop, dl, MIN( max_connections, SG_manifest_get_block_count( block_requests ) ) );
+   if( rc != 0 ) {
+
+      SG_error("md_download_loop_init rc = %d\n", rc );
+      md_downloader_stop( dl );
+      md_downloader_shutdown( dl );
+      SG_safe_free( dl );
+      SG_safe_free( dl );
+      SG_safe_free( dlloop );
+      SG_safe_free( gateway_ids );
+      SG_chunk_free( &next_block );
+
+      return rc;
+   }
+
+   itr = SG_manifest_block_iterator_begin( block_requests );
+
+   SG_debug("Initialize read download loop %p for %" PRIX64 " with %" PRIu64 " contexts\n", dlloop, SG_manifest_get_file_id(block_requests), MIN( max_connections, SG_manifest_get_block_count( block_requests ) ) );
+   SG_debug("Will download %zu blocks for %" PRIX64 " with %p\n", block_gateway_idx.size(), SG_manifest_get_file_id(block_requests), dlloop);
+
+   // download each block
+   while( block_gateway_idx.size() > 0 ) {
+
+      // start as many downloads as we can
+      while( block_gateway_idx.size() > 0 ) {
+
+         // cycle through the manifest of blocks to fetch
+         if( itr == SG_manifest_block_iterator_end( block_requests ) ) {
+            itr = SG_manifest_block_iterator_begin( block_requests );
+
+            if( cycled_through ) {
+               // all download slots are filled
+               SG_debug("Cycled through %p\n", dlloop);
+               cycled_through = false;
+               break;
+            }
+
+            cycled_through = true;
+         }
+
+         block_id = SG_manifest_block_iterator_id( itr );
+         block_info = SG_manifest_block_iterator_block( itr );
+
+         // did we get this block already?
+         if( block_gateway_idx.find( block_id ) == block_gateway_idx.end() ) {
+
+            itr++;
+            continue;
+         }
+
+         // are we getting this block already?
+         if( blocks_in_flight.count( block_id ) > 0 ) {
+
+            itr++;
+            continue;
+         }
+
+         // have we tried each gateway?
+         if( (unsigned)(block_gateway_idx[ block_id ]) >= num_gateway_ids ) {
+
+            SG_error("Tried all RGs for block %" PRIX64 "[%" PRIu64 ".%" PRId64 "]\n", SG_manifest_get_file_id( block_requests ), block_id, SG_manifest_block_version( block_info ) );
+            rc = -ENODATA;
+            break;
+         }
+
+         // next block download
+         dlctx = NULL;
+         rc = md_download_loop_next( dlloop, &dlctx );
+         if( rc != 0 ) {
+
+            if( rc == -EAGAIN ) {
+               SG_debug("All download slots in %p are full\n", dlloop);
+               rc = 0;
+               break;
+            }
+
+            SG_error("md_download_loop_next rc = %d\n", rc );
+            break;
+         }
+
+         // next gateway
+         gateway_idx = block_gateway_idx[ block_id ];
+
+         // start this block
+         rc = SG_request_data_init_block( gateway, fs_path, SG_manifest_get_file_id(block_requests), SG_manifest_get_file_version(block_requests), block_id, SG_manifest_block_version( block_info ), &reqdat );
+         if( rc != 0 ) {
+            SG_error("SG_request_data_init_block(%" PRIX64 ".%" PRId64 "[%" PRIu64 ".%" PRId64 "]) rc = %d\n",
+                      SG_manifest_get_file_id(block_requests), SG_manifest_get_file_version(block_requests), block_id, SG_manifest_block_version( block_info ), rc );
+            break;
+         }
+
+         // NOTE: extra download ref
+         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlcpool );
+
+         // wake up if there is a waiting thread
+         md_download_connection_pool_call_event_func(dlcpool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)(&gateway_ids[ gateway_idx ]));
+
+         SG_request_data_free( &reqdat );
+
+         if( rc != 0 ) {
+
+            if( rc == -EAGAIN ) {
+               // gateway ID is not found--we should reload the cert bundle
+               SG_gateway_start_reload( gateway );
+            }
+
+            SG_error("SG_client_get_block_async( %" PRIu64 " ) rc = %d\n", gateway_ids[ gateway_idx ], rc );
+            break;
+         }
+
+         try {
+
+             // next block
+             itr++;
+
+             // next gateway for this block
+             block_gateway_idx[ block_id ]++;
+
+             // in-flight!
+             blocks_in_flight.insert( block_id );
+         }
+         catch( bad_alloc& ba ) {
+             rc = -ENOMEM;
+             break;
+         }
+
+         SG_debug("Will download %" PRIX64 "[%" PRIu64 ".%" PRId64 "] with %p in %p\n", SG_manifest_get_file_id(block_requests), block_id, SG_manifest_block_version( block_info ), dlctx, dlloop );
+         SG_debug("download loop %p has %d downloads\n", dlloop, md_download_loop_num_initialized(dlloop));
+
+         // started at least one block; try to start more
+         cycled_through = false;
+      }
+
+      if( rc != 0 ) {
+         SG_debug("Will abort download loop %p\n", dlloop);
+         break;
+      }
+
+      if( md_download_loop_num_initialized(dlloop) == 0 && block_gateway_idx.size() == 0 ) {
+         SG_debug("Download loop is dead; no more downloads (%p)\n", dlloop);
+         break;
+      }
+
+      // wait for at least one of the downloads to finish
+      rc = md_download_loop_run( dlloop );
+      if( rc != 0 ) {
+
+         if( rc < 0 ) {
+             SG_error("md_download_loop_run rc = %d\n", rc );
+         }
+         else {
+            // done!
+            rc = 0;
+            SG_debug("download loop %p is done\n", dlloop);
+         }
+         break;
+      }
+
+      rc = 0;
+
+      // find the finished downloads.  check at least once.
+      while( true ) {
+
+         // next finished download
+         dlctx = NULL;
+         rc = md_download_loop_finished( dlloop, &dlctx );
+         if( rc != 0 ) {
+
+            if( rc == -EAGAIN ) {
+
+               // out of finished downloads
+               rc = 0;
+               break;
+            }
+
+            SG_error("md_download_loop_finished rc = %d\n", rc );
+            break;
+         }
+
+         // process the block and free up the download handle
+         next_block.len = block_size;
+         memset( next_block.data, 0, next_block.len );
+
+         rc = SG_client_get_block_finish( gateway, block_requests, dlctx, &next_block_id, &next_block );
+         if( rc != 0 ) {
+
+            SG_error("SG_client_get_block_finish rc = %d\n", rc );
+            break;
+         }
+
+         // done with this download
+         SG_debug("Finished with download context %p\n", dlctx);
+         curl = NULL;
+         rc = md_download_context_unref_free( dlctx, &curl );
+         //if( curl != NULL ) {
+            // curl_easy_cleanup( curl );
+         //}
+
+         /////////////////////////////////////////////////////
+         char debug_buf[52];
+         memset(debug_buf, 0, 52);
+         for( unsigned int i = 0; i < (50 / 3) && i < next_block.len; i++ ) {
+            char nbuf[5];
+            memset(nbuf, 0, 5);
+            snprintf(nbuf, 4, " %02X", next_block.data[i]);
+            strcat(debug_buf, nbuf);
+         }
+         SG_debug("Fetched block (copied '%s...', %" PRIu64 " bytes total to %p)\n", debug_buf, next_block.len, next_block.data);
+         /////////////////////////////////////////////////////
+
+
+         // copy the data in
+         // NOTE: we do not emplace the data, since this method is used to directly copy
+         // downloaded data into a client reader's read buffer
+         SG_chunk_copy( &(*blocks)[ next_block_id ].buf, &next_block );
+
+         /////////////////////////////////////////////////////
+         memset(debug_buf, 0, 52);
+         for( unsigned int i = 0; i < (50 / 3) && i < (*blocks)[next_block_id].buf.len; i++ ) {
+            char nbuf[5];
+            memset(nbuf, 0, 5);
+            snprintf(nbuf, 4, " %02X", (*blocks)[next_block_id].buf.data[i]);
+            strcat(debug_buf, nbuf);
+         }
+         SG_debug("Copied into block set (copied '%s...', %" PRIu64 " bytes total to %p)\n", debug_buf, (*blocks)[next_block_id].buf.len, (*blocks)[next_block_id].buf.data);
+         /////////////////////////////////////////////////////
+
+         try {
+             // finished this block
+             block_gateway_idx.erase( next_block_id );
+             blocks_in_flight.erase( next_block_id );
+         }
+         catch( bad_alloc& ba ) {
+             rc = -ENOMEM;
+             break;
+         }
+
+         SG_debug("Downloaded block %" PRIu64 "\n", next_block_id );
+      }
+
+      if( rc != 0 ) {
+         SG_debug("Will abort download loop %p\n", dlloop);
+         break;
+      }
+   }
+
+   SG_debug("Read finished: md_download_loop_running(%p) == %d, block_gateway_idx.size() == %zu\n", dlloop, md_download_loop_running(dlloop), block_gateway_idx.size() );
+
+   // failure?
+   if( rc != 0 ) {
+
+      SG_debug("Abort download loop %p\n", dlloop);
+      md_download_loop_abort( dlloop );
+      rc = -EIO;
+
+      // unref failed downloads
+      // (do this twice on abort, since we have to clear out
+      // downloads that were in-flight when we aborted)
+      SG_client_download_async_cleanup_loop( dlloop );
+   }
+
+   SG_client_download_async_cleanup_loop( dlloop );
+   md_download_loop_cleanup( dlloop, NULL, NULL );
+   md_download_loop_free( dlloop );
+   SG_safe_free( dlloop );
+
+   md_downloader_stop( dl );
+   md_downloader_shutdown( dl );
+   SG_safe_free( dl );
+
+   SG_safe_free( gateway_ids );
+   SG_chunk_free( &next_block );
+
+   // blocks is (partially) populated with chunks
+   return rc;
+}
 
 /**
  * @brief Read a set of blocks from the cache
@@ -1019,6 +1431,34 @@ int UG_read_blocks_remote2( struct SG_gateway* gateway, char const* fs_path, str
    return rc;
 }
 
+/**
+ * @brief Read remotely-available blocks from RGs
+ *
+ * This consumes the contents of blocks_not_local.  the caller can call this method repeatedly to retry Failure.
+ * @retval Success
+ * @retval -ENOMEM Out of Memory
+ * @retval -errno Download error
+ */
+int UG_read_prefetch_blocks_remote( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks, struct md_download_connection_pool* dlcpool ) {
+
+   int rc = 0;
+
+   rc = UG_read_prefetch_download_blocks( gateway, fs_path, blocks_not_local, blocks, dlcpool );
+
+   if( rc != 0 ) {
+      SG_error("UG_read_prefetch_download_blocks( '%s' (%" PRIX64 ".%" PRId64 ") ) rc = %d\n", fs_path, SG_manifest_get_file_id( blocks_not_local ), SG_manifest_get_file_version( blocks_not_local ), rc );
+      return rc;
+   }
+
+   // clear out satisfied requests
+   for( UG_dirty_block_map_t::iterator itr = blocks->begin(); itr != blocks->end(); itr++ ) {
+
+      SG_manifest_delete_block( blocks_not_local, itr->first );
+   }
+
+   return rc;
+}
+
 
 int UG_read_blocks_remote( struct SG_gateway* gateway, char const* fs_path, struct SG_manifest* blocks_not_local, UG_dirty_block_map_t* blocks ) {
     return UG_read_blocks_remote2(gateway, fs_path, blocks_not_local, blocks, NULL);
@@ -1232,7 +1672,7 @@ int UG_read_prefetch_impl( struct SG_gateway* gateway, char const* fs_path, char
 
       // fetch remote
       SG_debug("Download %zu blocks\n", SG_manifest_get_block_count( &blocks_to_download ));
-      rc = UG_read_blocks_remote2( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
+      rc = UG_read_prefetch_blocks_remote( gateway, fs_path, &blocks_to_download, &read_blocks, fh->download_connection_pool );
       if( rc != 0 ) {
 
          SG_error("UG_read_blocks_remote2( %" PRIX64 ".%" PRId64 "[%" PRIu64 "-%" PRIu64 "] ) rc = %d\n",
