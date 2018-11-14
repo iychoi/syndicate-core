@@ -410,6 +410,8 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
 
    struct md_download_context* dlctx = NULL;
    struct md_download_loop* dlloop = NULL;
+   struct md_download_connection_pool* temp_dlcpool = NULL;
+   struct md_download_connection* dlconn = NULL;
 
    struct SG_request_data reqdat;
 
@@ -429,6 +431,8 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
 
    set<uint64_t> blocks_in_flight;                  // set of blocks being downloaded right now (keyed by ID)
    bool cycled_through = false;                     // set to true once the maximum number of in-flight blocks has been started
+   set<struct md_download_connection*> conns_in_use;
+   set<struct md_download_connection*>::iterator conns_in_use_it;
 
    memset( &next_block, 0, sizeof(struct SG_chunk) );
 
@@ -493,11 +497,27 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
       }
    }
 
+   if( dlcpool == NULL ) {
+       temp_dlcpool = md_download_connection_pool_new();
+       rc = md_download_connection_pool_init( temp_dlcpool );
+       if( rc != 0 ) {
+           SG_safe_free( gateway_ids );
+           SG_chunk_free( &next_block );
+           return rc;
+       }
+
+       dlcpool = temp_dlcpool;
+   }
+
    // prepare to download blocks
    dlloop = md_download_loop_new();
    if( dlloop == NULL ) {
       SG_safe_free( gateway_ids );
       SG_chunk_free( &next_block );
+      // delete
+      if( temp_dlcpool != NULL ) {
+           md_download_connection_pool_free(temp_dlcpool);
+      }
       return -ENOMEM;
    }
 
@@ -508,7 +528,10 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
       SG_safe_free( dlloop );
       SG_safe_free( gateway_ids );
       SG_chunk_free( &next_block );
-
+      // delete
+      if( temp_dlcpool != NULL ) {
+           md_download_connection_pool_free(temp_dlcpool);
+      }
       return rc;
    }
 
@@ -581,6 +604,15 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
          gateway_idx = block_gateway_idx[ block_id ];
 
          // start this block
+         // get connection
+         dlconn = md_download_connection_pool_get(dlcpool, gateway_ids[ gateway_idx ]);
+         if( dlconn == NULL ) {
+             SG_error("md_download_connection_pool_get( %" PRIu64 " )\n", gateway_ids[ gateway_idx ]);
+             break;
+         }
+
+         conns_in_use.insert(dlconn);
+
          rc = SG_request_data_init_block( gateway, fs_path, SG_manifest_get_file_id(block_requests), SG_manifest_get_file_version(block_requests), block_id, SG_manifest_block_version( block_info ), &reqdat );
          if( rc != 0 ) {
             SG_error("SG_request_data_init_block(%" PRIX64 ".%" PRId64 "[%" PRIu64 ".%" PRId64 "]) rc = %d\n",
@@ -589,7 +621,7 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
          }
 
          // NOTE: extra download ref
-         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlcpool );
+         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlconn );
 
          // wake up if there is a waiting thread
          md_download_connection_pool_call_event_func(dlcpool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)(&gateway_ids[ gateway_idx ]));
@@ -744,6 +776,11 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
    }
 
    SG_debug("Read finished: md_download_loop_running(%p) == %d, block_gateway_idx.size() == %zu\n", dlloop, md_download_loop_running(dlloop), block_gateway_idx.size() );
+   for(conns_in_use_it=conns_in_use.begin(); conns_in_use_it != conns_in_use.end(); conns_in_use_it++) {
+       dlconn = *conns_in_use_it;
+       md_download_connection_pool_make_idle( dlcpool, dlconn );
+   }
+   conns_in_use.clear();
 
    // failure?
    if( rc != 0 ) {
@@ -762,6 +799,11 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
    md_download_loop_cleanup( dlloop, NULL, NULL );
    md_download_loop_free( dlloop );
    SG_safe_free( dlloop );
+
+   // delete
+   if( temp_dlcpool != NULL ) {
+        md_download_connection_pool_free(temp_dlcpool);
+   }
 
    SG_safe_free( gateway_ids );
    SG_chunk_free( &next_block );
@@ -789,6 +831,8 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
    struct md_downloader* dl = NULL;
    struct md_download_context* dlctx = NULL;
    struct md_download_loop* dlloop = NULL;
+   struct md_download_connection_pool* temp_dlcpool = NULL;
+   struct md_download_connection* dlconn = NULL;
 
    struct SG_request_data reqdat;
 
@@ -808,6 +852,8 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
 
    set<uint64_t> blocks_in_flight;                  // set of blocks being downloaded right now (keyed by ID)
    bool cycled_through = false;                     // set to true once the maximum number of in-flight blocks has been started
+   set<struct md_download_connection*> conns_in_use;
+   set<struct md_download_connection*>::iterator conns_in_use_it;
 
    memset( &next_block, 0, sizeof(struct SG_chunk) );
 
@@ -879,20 +925,43 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
       return -ENOMEM;
    }
 
+   if( dlcpool == NULL ) {
+       temp_dlcpool = md_download_connection_pool_new();
+       rc = md_download_connection_pool_init( temp_dlcpool );
+       if( rc != 0 ) {
+           SG_safe_free( dl );
+           SG_safe_free( gateway_ids );
+           SG_chunk_free( &next_block );
+           return rc;
+       }
+
+       dlcpool = temp_dlcpool;
+   }
+
    // set up the downloader
    rc = md_downloader_init( dl, "gateway_prefetch" );
    if( rc != 0 ) {
       SG_error("md_downloader_init('gateway_prefetch') rc = %d\n", rc );
+      SG_safe_free( dl );
       SG_safe_free( gateway_ids );
       SG_chunk_free( &next_block );
+      // delete
+      if( temp_dlcpool != NULL ) {
+           md_download_connection_pool_free(temp_dlcpool);
+      }
       return rc;
    }
 
    rc = md_downloader_start( dl );
    if( rc != 0 ) {
       SG_error("md_downloader_start('gateway_prefetch') rc = %d\n", rc );
+      SG_safe_free( dl );
       SG_safe_free( gateway_ids );
       SG_chunk_free( &next_block );
+      // delete
+      if( temp_dlcpool != NULL ) {
+           md_download_connection_pool_free(temp_dlcpool);
+      }
       return rc;
    }
 
@@ -902,6 +971,10 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
       SG_safe_free( dl );
       SG_safe_free( gateway_ids );
       SG_chunk_free( &next_block );
+      // delete
+      if( temp_dlcpool != NULL ) {
+           md_download_connection_pool_free(temp_dlcpool);
+      }
       return -ENOMEM;
    }
 
@@ -917,7 +990,10 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
       SG_safe_free( dlloop );
       SG_safe_free( gateway_ids );
       SG_chunk_free( &next_block );
-
+      // delete
+      if( temp_dlcpool != NULL ) {
+           md_download_connection_pool_free(temp_dlcpool);
+      }
       return rc;
    }
 
@@ -990,6 +1066,15 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
          gateway_idx = block_gateway_idx[ block_id ];
 
          // start this block
+         // get connection
+         dlconn = md_download_connection_pool_get(dlcpool, gateway_ids[ gateway_idx ]);
+         if( dlconn == NULL ) {
+             SG_error("md_download_connection_pool_get( %" PRIu64 " )\n", gateway_ids[ gateway_idx ]);
+             break;
+         }
+
+         conns_in_use.insert(dlconn);
+
          rc = SG_request_data_init_block( gateway, fs_path, SG_manifest_get_file_id(block_requests), SG_manifest_get_file_version(block_requests), block_id, SG_manifest_block_version( block_info ), &reqdat );
          if( rc != 0 ) {
             SG_error("SG_request_data_init_block(%" PRIX64 ".%" PRId64 "[%" PRIu64 ".%" PRId64 "]) rc = %d\n",
@@ -998,7 +1083,7 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
          }
 
          // NOTE: extra download ref
-         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlcpool );
+         rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlconn );
 
          // wake up if there is a waiting thread
          md_download_connection_pool_call_event_func(dlcpool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)(&gateway_ids[ gateway_idx ]));
@@ -1153,6 +1238,11 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
    }
 
    SG_debug("Read finished: md_download_loop_running(%p) == %d, block_gateway_idx.size() == %zu\n", dlloop, md_download_loop_running(dlloop), block_gateway_idx.size() );
+   for(conns_in_use_it=conns_in_use.begin(); conns_in_use_it != conns_in_use.end(); conns_in_use_it++) {
+       dlconn = *conns_in_use_it;
+       md_download_connection_pool_make_idle( dlcpool, dlconn );
+   }
+   conns_in_use.clear();
 
    // failure?
    if( rc != 0 ) {
@@ -1175,6 +1265,11 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
    md_downloader_stop( dl );
    md_downloader_shutdown( dl );
    SG_safe_free( dl );
+
+   // delete
+   if( temp_dlcpool != NULL ) {
+        md_download_connection_pool_free(temp_dlcpool);
+   }
 
    SG_safe_free( gateway_ids );
    SG_chunk_free( &next_block );
@@ -1889,7 +1984,6 @@ int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* rout
     struct UG_read_prefetch* prefetch;
     off_t new_start_offset;
     int tasks_to_be_created;
-    uint64_t current_request_count;
 
     UG_read_prefetch_queue_clear_stale(fh->prefetch_queue, offset);
 
@@ -1980,7 +2074,10 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
    // has buffered data?
    read = UG_read_buffer_copy_data(fh->read_buffer, buf, buf_len, offset, &eof);
    if(read >= 0) {
-       SG_debug("finished read from read buffer, offset %jd, len %d\n", offset, read);
+       if(read > 0) {
+           SG_debug("finished read from read buffer, offset %jd, len %d\n", offset, read);
+       }
+
        total_read += read;
 
        if(total_read >= (int) buf_len || eof) {
@@ -2000,7 +2097,10 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
            // re-read
            read = UG_read_buffer_copy_data(fh->read_buffer, buf + total_read, buf_len - total_read, offset + total_read, &eof);
            if(read >= 0) {
-               SG_debug("finished read from read buffer (second), offset %jd, len %d\n", offset + total_read, read );
+               if(read > 0) {
+                   SG_debug("finished read from read buffer (second), offset %jd, len %d\n", offset + total_read, read );
+               }
+
                req_offset = UG_read_prefetch_block_offset(offset + total_read, fh->block_size);
                // req_offset = start offset of the current block
                total_read += read;
@@ -2032,7 +2132,10 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
            // re-read
            read = UG_read_buffer_copy_data(fh->read_buffer, buf + total_read, buf_len - total_read, offset + total_read, &eof);
            if(read >= 0) {
-               SG_debug("finished read from read buffer (second), offset %jd, len %d\n", offset + total_read, read );
+               if(read > 0) {
+                   SG_debug("finished read from read buffer (second), offset %jd, len %d\n", offset + total_read, read );
+               }
+
                req_offset = UG_read_prefetch_block_offset(offset + total_read, fh->block_size);
                // req_offset = start offset of the current block
                total_read += read;

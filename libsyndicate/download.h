@@ -31,6 +31,7 @@
 #include "libsyndicate/util.h"
 
 #include <set>
+#include <queue>
 
 using namespace std;
 
@@ -62,10 +63,37 @@ struct md_download_loop;
 
 // download connection pool
 // IYCHOI
-struct md_download_connection;
+struct md_download_connection {
+    struct md_download_connection_pool* pool;
+    uint64_t gateway_id;
+    CURL* curl;
+    bool inited;
+    pthread_rwlock_t lock;
+};
+
+typedef queue<struct md_download_connection*> md_download_connection_queue_t;
+typedef set<struct md_download_connection*> md_download_connection_set_t;
+
+struct md_download_connection_group {
+    md_download_connection_set_t* active;
+    md_download_connection_queue_t* idle;
+    pthread_rwlock_t lock;
+    bool inited;
+};
+
+typedef map<uint64_t, struct md_download_connection_group*> md_download_connection_pool_map_t;
+
 struct md_download_connection_pool;
-typedef map<uint64_t, struct md_download_connection*> md_download_connection_pool_map_t;
+
 typedef void (*md_download_connection_pool_event_func)(struct md_download_connection_pool* dlcpool, uint32_t event_type, void* event_data);
+
+struct md_download_connection_pool {
+    md_download_connection_pool_map_t* connections;
+    void* user_data;
+    md_download_connection_pool_event_func event_func;
+    pthread_rwlock_t lock;
+    bool inited;
+};
 
 #define MD_DOWNLOAD_CONNECTION_POOL_EVENT_GET_CONNECTION 0x1
 #define MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST 0x2
@@ -184,6 +212,20 @@ int md_download_connection_wlock( struct md_download_connection* dlconn );
 int md_download_connection_unlock( struct md_download_connection* dlconn );
 CURL* md_download_connection_get_curl( struct md_download_connection* dlconn );
 
+// connection group
+struct md_download_connection_group* md_download_connection_group_new();
+int md_download_connection_group_init( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_free( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_wlock( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_rlock( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_unlock( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_count_active( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_pop_active( struct md_download_connection_group* dlcgroup, struct md_download_connection* dlconn );
+int md_download_connection_group_push_active( struct md_download_connection_group* dlcgroup, struct md_download_connection* dlconn );
+int md_download_connection_group_count_idle( struct md_download_connection_group* dlcgroup );
+struct md_download_connection* md_download_connection_group_pop_idle( struct md_download_connection_group* dlcgroup );
+int md_download_connection_group_push_idle( struct md_download_connection_group* dlcgroup, struct md_download_connection* dlconn );
+
 // connection pool
 struct md_download_connection_pool* md_download_connection_pool_new();
 int md_download_connection_pool_init( struct md_download_connection_pool* dlcpool );
@@ -192,6 +234,7 @@ int md_download_connection_pool_wlock( struct md_download_connection_pool* dlcpo
 int md_download_connection_pool_rlock( struct md_download_connection_pool* dlcpool );
 int md_download_connection_pool_unlock( struct md_download_connection_pool* dlcpool );
 struct md_download_connection* md_download_connection_pool_get( struct md_download_connection_pool* dlcpool, uint64_t gateway_id);
+int md_download_connection_pool_make_idle( struct md_download_connection_pool* dlcpool, struct md_download_connection* dlconn );
 int md_download_connection_pool_set_user_data( struct md_download_connection_pool* dlcpool, void* user_data);
 void* md_download_connection_pool_get_user_data( struct md_download_connection_pool* dlcpool );
 int md_download_connection_pool_set_event_func( struct md_download_connection_pool* dlcpool, md_download_connection_pool_event_func func);

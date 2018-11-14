@@ -384,15 +384,13 @@ static int SG_client_get_manifest_curl( struct SG_gateway* gateway, struct SG_re
  * @return -EPROTO Any other HTTP 400-level error
  * @return -errno on socket- and recv-related errors
  */
-int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_gateway_id, uint64_t remote_gateway_id, struct SG_manifest* manifest, struct md_download_connection_pool* dlcpool ) {
+int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t coordinator_gateway_id, uint64_t remote_gateway_id, struct SG_manifest* manifest, struct md_download_connection* dlconn ) {
 
    int rc = 0;
    char* manifest_url = NULL;
    CURL* curl = NULL;
    struct ms_client* ms = SG_gateway_ms( gateway );
    struct md_syndicate_conf* conf = SG_gateway_conf( gateway );
-   struct md_download_connection_pool* temp_dlcpool = NULL;
-   struct md_download_connection* dlconn = NULL;
 
    uint64_t volume_id = ms_client_get_volume_id( ms );
 
@@ -431,26 +429,6 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       return rc;
    }
 
-    if( dlcpool == NULL ) {
-        temp_dlcpool = md_download_connection_pool_new();
-        rc = md_download_connection_pool_init( temp_dlcpool );
-        if( rc != 0 ) {
-            return rc;
-        }
-
-        dlcpool = temp_dlcpool;
-    }
-
-   // get connection
-   dlconn = md_download_connection_pool_get( dlcpool, remote_gateway_id);
-   if( dlconn == NULL ) {
-       // delete
-        if( temp_dlcpool != NULL ) {
-            md_download_connection_pool_free(temp_dlcpool);
-        }
-       return -EINVAL;
-   }
-
    md_download_connection_wlock(dlconn);
    curl = md_download_connection_get_curl(dlconn);
 
@@ -480,11 +458,6 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       //curl_easy_cleanup( curl );
       SG_safe_free( manifest_url );
       md_download_connection_unlock(dlconn);
-
-      // delete
-        if( temp_dlcpool != NULL ) {
-            md_download_connection_pool_free(temp_dlcpool);
-        }
       return rc;
    }
 
@@ -497,11 +470,6 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       //curl_easy_cleanup( curl );
       SG_safe_free( manifest_url );
       md_download_connection_unlock(dlconn);
-
-      // delete
-        if( temp_dlcpool != NULL ) {
-            md_download_connection_pool_free(temp_dlcpool);
-        }
       return rc;
    }
 
@@ -522,21 +490,12 @@ int SG_client_get_manifest( struct SG_gateway* gateway, struct SG_request_data* 
       SG_safe_free( manifest_url );
       md_download_connection_unlock(dlconn);
 
-      // delete
-        if( temp_dlcpool != NULL ) {
-            md_download_connection_pool_free(temp_dlcpool);
-        }
       return -EBADMSG;
    }
 
    //curl_easy_cleanup( curl );
    SG_safe_free( manifest_url );
    md_download_connection_unlock(dlconn);
-
-   // delete
-    if( temp_dlcpool != NULL ) {
-        md_download_connection_pool_free(temp_dlcpool);
-    }
    return rc;
 }
 
@@ -820,15 +779,13 @@ static void SG_client_get_block_async_cleanup( void* cls ) {
  * @retval -ENOMEM reqdat isn't a block request
  * @retval -ENOENT The remote gateway cannot be looked up
  */
-int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, struct md_download_loop* dlloop, struct md_download_context* dlctx, struct md_download_connection_pool* dlcpool ) {
+int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_data* reqdat, uint64_t remote_gateway_id, struct md_download_loop* dlloop, struct md_download_context* dlctx, struct md_download_connection* dlconn ) {
 
    int rc = 0;
    char* block_url = NULL;
    struct ms_client* ms = SG_gateway_ms( gateway );
    uint64_t block_size = ms_client_get_volume_blocksize( ms );
    struct SG_request_data* reqdat_dup = NULL;
-   struct md_download_connection* dlconn = NULL;
-   struct md_download_connection_pool* temp_dlcpool = NULL;
 
    // sanity check
    if( !SG_request_is_block( reqdat ) ) {
@@ -860,34 +817,10 @@ int SG_client_get_block_async( struct SG_gateway* gateway, struct SG_request_dat
       return rc;
    }
 
-    if( dlcpool == NULL ) {
-        temp_dlcpool = md_download_connection_pool_new();
-        rc = md_download_connection_pool_init( temp_dlcpool );
-        if( rc != 0 ) {
-            return rc;
-        }
-
-        dlcpool = temp_dlcpool;
-    }
-
-   // get connection
-   dlconn = md_download_connection_pool_get( dlcpool, remote_gateway_id);
-   if( dlconn == NULL ) {
-       SG_safe_free( block_url );
-       SG_safe_free( reqdat_dup );
-       return -EINVAL;
-   }
-
    // GO GO GO!
    rc = SG_client_download_async_start( gateway, dlloop, dlctx, dlconn, reqdat->block_id, block_url, block_size * SG_MAX_BLOCK_LEN_MULTIPLIER, reqdat_dup, SG_client_get_block_async_cleanup );
 
-   // delete
-    if( temp_dlcpool != NULL ) {
-        md_download_connection_pool_free(temp_dlcpool);
-    }
-
    if( rc != 0 ) {
-
       SG_error("SG_client_download_async_start('%s') rc = %d\n", block_url, rc );
       SG_safe_free( block_url );
       return rc;

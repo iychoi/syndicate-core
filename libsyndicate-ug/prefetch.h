@@ -36,7 +36,7 @@
 #include "inode.h"
 #include "block.h"
 
-#define MAX_PREFETCH_LEN 2
+#define MAX_PREFETCH_LEN 4
 
 struct UG_read_buffer {
     char* buffer;
@@ -67,7 +67,7 @@ struct UG_read_prefetch_queue_signal {
     uint32_t last_event;
 };
 
-typedef queue< struct UG_read_prefetch* > UG_read_prefetch_queue_t;
+typedef queue<struct UG_read_prefetch*> UG_read_prefetch_queue_t;
 typedef map<pthread_t, struct UG_read_prefetch_queue_signal*> UG_read_prefetch_queue_signal_map_t;
 
 struct UG_read_prefetch_queue {

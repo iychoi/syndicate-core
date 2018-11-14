@@ -210,6 +210,8 @@ int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_requ
    SG_messages::Manifest mmsg;
    struct SG_chunk serialized_manifest;
    struct SG_chunk manifest_chunk;
+   struct md_download_connection_pool* temp_dlcpool = NULL;
+   struct md_download_connection* dlconn = NULL;
 
    if( !SG_request_is_manifest( reqdat ) ) {
       return -EINVAL;
@@ -237,12 +239,33 @@ int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_requ
    memset( &serialized_manifest, 0, sizeof(struct SG_chunk));
    memset( &manifest_chunk, 0, sizeof(struct SG_chunk));
 
+   if( dlcpool == NULL ) {
+       temp_dlcpool = md_download_connection_pool_new();
+       rc = md_download_connection_pool_init( temp_dlcpool );
+       if( rc != 0 ) {
+           return rc;
+       }
+
+       dlcpool = temp_dlcpool;
+   }
+
    for( size_t i = 0; i < num_gateway_ids; i++ ) {
 
       SG_debug("GET manifest %" PRIX64 ".%" PRId64 "/manifest.%ld.%ld from %" PRIu64 "\n",
             reqdat->file_id, reqdat->file_version, reqdat->manifest_timestamp.tv_sec, reqdat->manifest_timestamp.tv_nsec, gateway_ids[i] );
 
-      rc = SG_client_get_manifest( gateway, reqdat, coordinator_id, gateway_ids[i], manifest, dlcpool );
+        // get connection
+        dlconn = md_download_connection_pool_get(dlcpool, gateway_ids[i]);
+        if( dlconn == NULL ) {
+            // delete
+             if( temp_dlcpool != NULL ) {
+                 md_download_connection_pool_free(temp_dlcpool);
+             }
+            return -EINVAL;
+        }
+
+      rc = SG_client_get_manifest( gateway, reqdat, coordinator_id, gateway_ids[i], manifest, dlconn );
+      md_download_connection_pool_make_idle(dlcpool, dlconn);
       if( rc != 0 ) {
 
          // not from this one
@@ -256,6 +279,11 @@ int UG_consistency_manifest_download( struct SG_gateway* gateway, struct SG_requ
          break;
       }
    }
+
+   // delete
+    if( temp_dlcpool != NULL ) {
+       md_download_connection_pool_free(temp_dlcpool);
+    }
 
    return rc;
 }

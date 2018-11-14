@@ -113,24 +113,6 @@ struct md_download_loop {
    bool started;                           ///< Flag whether the download loop is in progress
 };
 
-// IYCHOI
-struct md_download_connection {
-    struct md_download_connection_pool* pool;
-    uint64_t gateway_id;
-    CURL* curl;
-    bool inited;
-    pthread_rwlock_t lock;
-};
-
-struct md_download_connection_pool {
-    md_download_connection_pool_map_t* connections;
-    void* user_data;
-    md_download_connection_pool_event_func event_func;
-    pthread_rwlock_t lock;
-    bool inited;
-};
-// IYCHOI
-
 static void* md_downloader_main( void* arg );
 int md_downloader_finalize_download_context( struct md_download_context* dlctx, int curl_rc );
 
@@ -2581,6 +2563,185 @@ CURL* md_download_connection_get_curl( struct md_download_connection* dlconn ) {
     return dlconn->curl;
 }
 
+// connection group
+struct md_download_connection_group* md_download_connection_group_new() {
+    return SG_CALLOC( struct md_download_connection_group, 1 );
+}
+
+int md_download_connection_group_init( struct md_download_connection_group* dlcgroup ) {
+    int rc = 0;
+
+    memset( dlcgroup, 0, sizeof(struct md_download_connection_group) );
+
+    rc = pthread_rwlock_init( &dlcgroup->lock, NULL );
+    if( rc != 0 ) {
+       return -rc;
+    }
+
+    dlcgroup->active = SG_safe_new( md_download_connection_set_t() );
+    if(dlcgroup->active == NULL) {
+        return -ENOMEM;
+    }
+
+    dlcgroup->idle = SG_safe_new( md_download_connection_queue_t() );
+    if(dlcgroup->idle == NULL) {
+        SG_safe_delete(dlcgroup->active);
+        return -ENOMEM;
+    }
+
+    dlcgroup->inited = true;
+    return 0;
+}
+
+int md_download_connection_group_free( struct md_download_connection_group* dlcgroup ) {
+    if( !dlcgroup->inited ) {
+       // not initialized
+       return -EINVAL;
+    }
+
+    // destroy
+    md_download_connection_group_wlock( dlcgroup );
+    if(dlcgroup->active != NULL) {
+        for(md_download_connection_set_t::iterator itr = dlcgroup->active->begin(); itr != dlcgroup->active->end(); itr++ ) {
+            struct md_download_connection* dlconn = *itr;
+            md_download_connection_free(dlconn);
+            SG_safe_free(dlconn);
+        }
+
+        dlcgroup->active->clear();
+        delete dlcgroup->active;
+        dlcgroup->active = NULL;
+    }
+
+    if(dlcgroup->idle != NULL) {
+        while(dlcgroup->idle->size() > 0) {
+            struct md_download_connection* dlconn = dlcgroup->idle->front();
+            dlcgroup->idle->pop();
+
+            md_download_connection_free(dlconn);
+            SG_safe_free(dlconn);
+        }
+
+        delete dlcgroup->idle;
+        dlcgroup->idle = NULL;
+    }
+    md_download_connection_group_unlock( dlcgroup );
+    pthread_rwlock_destroy( &dlcgroup->lock );
+
+    memset( dlcgroup, 0, sizeof(struct md_download_connection_group) );
+
+    return 0;
+}
+
+int md_download_connection_group_wlock( struct md_download_connection_group* dlcgroup ) {
+   return pthread_rwlock_wrlock( &dlcgroup->lock );
+}
+
+int md_download_connection_group_rlock( struct md_download_connection_group* dlcgroup ) {
+   return pthread_rwlock_rdlock( &dlcgroup->lock );
+}
+
+int md_download_connection_group_unlock( struct md_download_connection_group* dlcgroup ) {
+   return pthread_rwlock_unlock( &dlcgroup->lock );
+}
+
+int md_download_connection_group_count_active( struct md_download_connection_group* dlcgroup ) {
+    int count = 0;
+    if( !dlcgroup->inited ) {
+       // not initialized
+       return -EINVAL;
+    }
+
+    md_download_connection_group_rlock( dlcgroup );
+    count = dlcgroup->active->size();
+    md_download_connection_group_unlock( dlcgroup );
+
+    return count;
+}
+
+int md_download_connection_group_pop_active( struct md_download_connection_group* dlcgroup, struct md_download_connection* dlconn ) {
+    if( !dlcgroup->inited ) {
+       // not initialized
+       SG_error("download connection group is not initialized for %p\n", dlcgroup);
+       return -EINVAL;
+    }
+
+    md_download_connection_group_wlock( dlcgroup );
+    dlcgroup->active->erase(dlconn);
+    md_download_connection_group_unlock( dlcgroup );
+    return 0;
+}
+
+int md_download_connection_group_push_active( struct md_download_connection_group* dlcgroup, struct md_download_connection* dlconn ) {
+    int rc = 0;
+    if( !dlcgroup->inited ) {
+       // not initialized
+       SG_error("download connection group is not initialized for %p\n", dlcgroup);
+       return -EINVAL;
+    }
+
+    md_download_connection_group_wlock( dlcgroup );
+    try {
+        dlcgroup->active->insert(dlconn);
+    }
+    catch(bad_alloc& ba) {
+        rc = -ENOMEM;
+    }
+    md_download_connection_group_unlock( dlcgroup );
+    return rc;
+}
+
+int md_download_connection_group_count_idle( struct md_download_connection_group* dlcgroup ) {
+    int count = 0;
+    if( !dlcgroup->inited ) {
+       // not initialized
+       return -EINVAL;
+    }
+
+    md_download_connection_group_rlock( dlcgroup );
+    count = dlcgroup->idle->size();
+    md_download_connection_group_unlock( dlcgroup );
+
+    return count;
+}
+
+struct md_download_connection* md_download_connection_group_pop_idle( struct md_download_connection_group* dlcgroup ) {
+    struct md_download_connection* dlconn = NULL;
+
+    if( !dlcgroup->inited ) {
+       // not initialized
+       SG_error("download connection group is not initialized for %p\n", dlcgroup);
+       return NULL;
+    }
+
+    md_download_connection_group_wlock( dlcgroup );
+    if(dlcgroup->idle->size() > 0) {
+        dlconn = dlcgroup->idle->front();
+        dlcgroup->idle->pop();
+    }
+    md_download_connection_group_unlock( dlcgroup );
+    return dlconn;
+}
+
+int md_download_connection_group_push_idle( struct md_download_connection_group* dlcgroup, struct md_download_connection* dlconn ) {
+    int rc = 0;
+    if( !dlcgroup->inited ) {
+       // not initialized
+       SG_error("download connection group is not initialized for %p\n", dlcgroup);
+       return -EINVAL;
+    }
+
+    md_download_connection_group_wlock( dlcgroup );
+    try {
+        dlcgroup->idle->push(dlconn);
+    }
+    catch(bad_alloc& ba) {
+        rc = -ENOMEM;
+    }
+    md_download_connection_group_unlock( dlcgroup );
+    return rc;
+}
+
 // connection pool
 struct md_download_connection_pool* md_download_connection_pool_new() {
     return SG_CALLOC( struct md_download_connection_pool, 1 );
@@ -2617,10 +2778,10 @@ int md_download_connection_pool_free( struct md_download_connection_pool* dlcpoo
     md_download_connection_pool_wlock( dlcpool );
     if(dlcpool->connections != NULL) {
         for( md_download_connection_pool_map_t::iterator itr = dlcpool->connections->begin(); itr != dlcpool->connections->end(); itr++ ) {
-            struct md_download_connection* dlconn = itr->second;
+            struct md_download_connection_group* dlcgroup = itr->second;
 
-            md_download_connection_free(dlconn);
-            SG_safe_free(dlconn);
+            md_download_connection_group_free(dlcgroup);
+            SG_safe_free(dlcgroup);
         }
 
         dlcpool->connections->clear();
@@ -2721,6 +2882,7 @@ int md_download_connection_pool_call_event_func( struct md_download_connection_p
 struct md_download_connection* md_download_connection_pool_get( struct md_download_connection_pool* dlcpool, uint64_t gateway_id) {
 
     int rc = 0;
+    struct md_download_connection_group* dlcgroup = NULL;
     struct md_download_connection* dlconn = NULL;
 
     if( !dlcpool->inited ) {
@@ -2729,44 +2891,107 @@ struct md_download_connection* md_download_connection_pool_get( struct md_downlo
        return NULL;
     }
 
-    md_download_connection_pool_rlock( dlcpool );
+    md_download_connection_pool_wlock( dlcpool );
 
     md_download_connection_pool_map_t::iterator itr = dlcpool->connections->find( gateway_id );
     if( itr != dlcpool->connections->end() ) {
        // found!
-       dlconn = itr->second;
-
-       if(dlconn != NULL) {
-           SG_debug("reuse existing download connection for gateway id %" PRIX64 ", conn %p\n", gateway_id, dlconn);
-       }
+       dlcgroup = itr->second;
+       SG_debug("reuse existing download connection group for gateway id %" PRIX64 "\n", gateway_id);
     }
 
-    if( dlconn == NULL) {
-        SG_debug("no download connection for gateway id %" PRIX64 " - create a new connection\n", gateway_id);
-        md_download_connection_pool_unlock( dlcpool );
+    if(dlcgroup == NULL) {
+        SG_debug("no download connection group for gateway id %" PRIX64 " - create a new connection group \n", gateway_id);
 
         // make one and put to the pool
-        dlconn = md_download_connection_new();
-        rc = md_download_connection_init( dlconn, dlcpool, gateway_id );
+        dlcgroup = md_download_connection_group_new();
+        rc = md_download_connection_group_init( dlcgroup );
         if( rc != 0) {
-            SG_safe_free(dlconn);
+            SG_safe_free(dlcgroup);
+            md_download_connection_pool_unlock( dlcpool );
             return NULL;
         }
 
-        // write lock
-        md_download_connection_pool_wlock( dlcpool );
         try {
-            (*dlcpool->connections)[ gateway_id ] = dlconn;
+            (*dlcpool->connections)[ gateway_id ] = dlcgroup;
         }
         catch( bad_alloc& ba ) {
+            SG_safe_free(dlcgroup);
             rc = -ENOMEM;
             md_download_connection_pool_unlock( dlcpool );
             return NULL;
         }
     }
 
+    dlconn = md_download_connection_group_pop_idle( dlcgroup );
+    if(dlconn == NULL) {
+        SG_debug("no download connection for gateway id %" PRIX64 " - create a new connection\n", gateway_id);
+
+        // make one and put to the pool
+        dlconn = md_download_connection_new();
+        rc = md_download_connection_init( dlconn, dlcpool, gateway_id );
+        if( rc != 0) {
+            SG_safe_free(dlconn);
+            md_download_connection_pool_unlock( dlcpool );
+            return NULL;
+        }
+
+        // push to active
+        rc = md_download_connection_group_push_active( dlcgroup, dlconn );
+        if( rc != 0) {
+            SG_safe_free(dlconn);
+            md_download_connection_pool_unlock( dlcpool );
+            return NULL;
+        }
+    } else {
+        SG_debug("reuse existing download connection for gateway id %" PRIX64 ", conn %p\n", gateway_id, dlconn);
+        // move to active
+        rc = md_download_connection_group_push_active( dlcgroup, dlconn );
+        if( rc != 0) {
+            md_download_connection_pool_unlock( dlcpool );
+            return NULL;
+        }
+    }
+
+    md_download_connection_pool_unlock( dlcpool );
+    return dlconn;
+}
+
+int md_download_connection_pool_make_idle( struct md_download_connection_pool* dlcpool, struct md_download_connection* dlconn ) {
+    int rc = 0;
+    struct md_download_connection_group* dlcgroup = NULL;
+
+    if( !dlcpool->inited ) {
+       // not initialized
+       SG_error("download connection pool is not initialized for %p\n", dlcpool);
+       return -EINVAL;
+    }
+
+    md_download_connection_pool_wlock( dlcpool );
+
+    md_download_connection_pool_map_t::iterator itr = dlcpool->connections->find( dlconn->gateway_id );
+    if( itr != dlcpool->connections->end() ) {
+       // found!
+       dlcgroup = itr->second;
+       rc = md_download_connection_group_pop_active(dlcgroup, dlconn);
+       if( rc != 0) {
+           md_download_connection_pool_unlock( dlcpool );
+           return rc;
+       }
+
+       SG_debug("make download connection idle for gateway id %" PRIX64 ", conn %p\n", dlconn->gateway_id, dlconn);
+       rc = md_download_connection_group_push_idle(dlcgroup, dlconn);
+       if( rc != 0) {
+           md_download_connection_pool_unlock( dlcpool );
+           return rc;
+       }
+    } else {
+        SG_error("download connection group is not found for %" PRIX64 "\n", dlconn->gateway_id);
+        return -EINVAL;
+    }
+
     md_download_connection_pool_unlock( dlcpool );
 
-    return dlconn;
+    return 0;
 }
 // IYCHOI
