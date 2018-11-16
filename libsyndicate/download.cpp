@@ -2563,6 +2563,16 @@ CURL* md_download_connection_get_curl( struct md_download_connection* dlconn ) {
     return dlconn->curl;
 }
 
+int md_download_connection_set_progress_handler( struct md_download_connection* dlconn, md_download_connection_progress_func func ) {
+    SG_debug("set a progress handler for gateway id %" PRIX64 ", conn %p\n", dlconn->gateway_id, dlconn);
+    curl_easy_setopt(dlconn->curl, CURLOPT_XFERINFOFUNCTION, func);
+    curl_easy_setopt(dlconn->curl, CURLOPT_XFERINFODATA, dlconn);
+    curl_easy_setopt(dlconn->curl, CURLOPT_NOPROGRESS, 0L ); // turn this on
+
+    dlconn->last_transfer_progress = -1;
+    return 0;
+}
+
 // connection group
 struct md_download_connection_group* md_download_connection_group_new() {
     return SG_CALLOC( struct md_download_connection_group, 1 );
@@ -2992,6 +3002,17 @@ int md_download_connection_pool_make_idle( struct md_download_connection_pool* d
 
     md_download_connection_pool_unlock( dlcpool );
 
+    return 0;
+}
+
+int md_download_connection_progress_event_handler(void* userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    struct md_download_connection* dlconn = (struct md_download_connection*) userdata;
+
+    if(dlconn->last_transfer_progress < 0) {
+        SG_debug("received progress update for gateway id %" PRIX64 ", conn %p, dlnow %" PRIX64 "\n", dlconn->gateway_id, dlconn, dlnow);
+        md_download_connection_pool_call_event_func(dlconn->pool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)dlconn->gateway_id);
+    }
+    dlconn->last_transfer_progress = dlnow;
     return 0;
 }
 // IYCHOI

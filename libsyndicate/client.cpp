@@ -556,6 +556,9 @@ int SG_client_download_async_start( struct SG_gateway* gateway, struct md_downlo
       return rc;
    }
 
+   // IYCHOI
+   md_download_connection_set_progress_handler(dlconn, md_download_connection_progress_event_handler);
+
    // set up download state
    reqcls->url = url;
    reqcls->chunk_id = chunk_id;

@@ -67,6 +67,7 @@ struct md_download_connection {
     struct md_download_connection_pool* pool;
     uint64_t gateway_id;
     CURL* curl;
+    int64_t last_transfer_progress;
     bool inited;
     pthread_rwlock_t lock;
 };
@@ -86,6 +87,7 @@ typedef map<uint64_t, struct md_download_connection_group*> md_download_connecti
 struct md_download_connection_pool;
 
 typedef void (*md_download_connection_pool_event_func)(struct md_download_connection_pool* dlcpool, uint32_t event_type, void* event_data);
+typedef int (*md_download_connection_progress_func)(void* userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
 
 struct md_download_connection_pool {
     md_download_connection_pool_map_t* connections;
@@ -98,7 +100,6 @@ struct md_download_connection_pool {
 #define MD_DOWNLOAD_CONNECTION_POOL_EVENT_GET_CONNECTION 0x1
 #define MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST 0x2
 #define MD_DOWNLOAD_CONNECTION_POOL_EVENT_FINISH_USE_CONNECTION 0x4
-// IYCHOI
 
 typedef map<CURL*, struct md_download_context*> md_downloading_map_t;
 typedef set<struct md_download_context*> md_pending_set_t;
@@ -211,6 +212,7 @@ int md_download_connection_free( struct md_download_connection* dlconn );
 int md_download_connection_wlock( struct md_download_connection* dlconn );
 int md_download_connection_unlock( struct md_download_connection* dlconn );
 CURL* md_download_connection_get_curl( struct md_download_connection* dlconn );
+int md_download_connection_set_progress_handler( struct md_download_connection* dlconn, md_download_connection_progress_func func );
 
 // connection group
 struct md_download_connection_group* md_download_connection_group_new();
@@ -240,7 +242,7 @@ void* md_download_connection_pool_get_user_data( struct md_download_connection_p
 int md_download_connection_pool_set_event_func( struct md_download_connection_pool* dlcpool, md_download_connection_pool_event_func func);
 md_download_connection_pool_event_func md_download_connection_pool_get_event_func( struct md_download_connection_pool* dlcpool );
 int md_download_connection_pool_call_event_func( struct md_download_connection_pool* dlcpool, uint32_t event_type, void* event_data);
-
+int md_download_connection_progress_event_handler(void* userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
 }
 
 #endif

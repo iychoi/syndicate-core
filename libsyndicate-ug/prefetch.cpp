@@ -408,12 +408,19 @@ int UG_read_prefetch_queue_retrieve_data(struct UG_read_prefetch_queue* queue, s
             buffer->block_size = prefetch->buffer->block_size;
             queue->queue->pop();
             rc = 0;
+
+            UG_read_buffer_unlock(buffer);
+            UG_read_buffer_unlock(prefetch->buffer);
+
+            UG_read_prefetch_unlock(prefetch);
+            UG_read_prefetch_free(prefetch);
+            SG_safe_free(prefetch);
+        } else {
+            UG_read_buffer_unlock(buffer);
+            UG_read_buffer_unlock(prefetch->buffer);
+
+            UG_read_prefetch_unlock(prefetch);
         }
-
-        UG_read_buffer_unlock(buffer);
-        UG_read_buffer_unlock(prefetch->buffer);
-
-        UG_read_prefetch_unlock(prefetch);
     }
     UG_read_prefetch_queue_unlock(queue);
     return rc;

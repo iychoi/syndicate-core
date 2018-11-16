@@ -623,9 +623,6 @@ int UG_read_download_blocks( struct SG_gateway* gateway, char const* fs_path, st
          // NOTE: extra download ref
          rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlconn );
 
-         // wake up if there is a waiting thread
-         md_download_connection_pool_call_event_func(dlcpool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)(&gateway_ids[ gateway_idx ]));
-
          SG_request_data_free( &reqdat );
 
          if( rc != 0 ) {
@@ -1084,9 +1081,6 @@ int UG_read_prefetch_download_blocks( struct SG_gateway* gateway, char const* fs
 
          // NOTE: extra download ref
          rc = SG_client_get_block_async( gateway, &reqdat, gateway_ids[ gateway_idx ], dlloop, dlctx, dlconn );
-
-         // wake up if there is a waiting thread
-         md_download_connection_pool_call_event_func(dlcpool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_HTTP_REQUEST, (void*)(&gateway_ids[ gateway_idx ]));
 
          SG_request_data_free( &reqdat );
 
@@ -1925,7 +1919,6 @@ UG_read_impl_fail:
 
       SG_debug("Read %" PRId64 " bytes (%s...)\n", num_read, debug_buf);
    }
-   md_download_connection_pool_call_event_func(fh->download_connection_pool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_FINISH_USE_CONNECTION, NULL);
    return num_read;
 }
 
@@ -1974,6 +1967,7 @@ static void* UG_prefetch_task( void* param ) {
 
     UG_read_buffer_unlock(prefetch_buffer);
     UG_read_prefetch_unlock(prefetch);
+    md_download_connection_pool_call_event_func(fh->download_connection_pool, MD_DOWNLOAD_CONNECTION_POOL_EVENT_FINISH_USE_CONNECTION, NULL);
     return NULL;
 }
 
@@ -2031,10 +2025,12 @@ int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* rout
         SG_debug("Push a prefetch task to the queue %s, offset %jd\n", fs_path, task_offset);
         UG_read_prefetch_queue_push(fh->prefetch_queue, new_prefetch);
 
-        // wait for http request and proceed
-        SG_debug("Wait a prefetch request %s, offset %jd\n", fs_path, task_offset);
-        UG_read_prefetch_queue_wait(fh->prefetch_queue, new_prefetch);
-        SG_debug("Wake up a prefetch request %s, offset %jd\n", fs_path, task_offset);
+        if(i < tasks_to_be_created - 1) {
+            // wait for http request and proceed
+            SG_debug("Wait a prefetch request %s, offset %jd\n", fs_path, task_offset);
+            UG_read_prefetch_queue_wait(fh->prefetch_queue, new_prefetch);
+            SG_debug("Wake up a prefetch request %s, offset %jd\n", fs_path, task_offset);
+        }
     }
     return 0;
 }
