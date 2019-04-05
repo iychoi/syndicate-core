@@ -1971,7 +1971,7 @@ static void* UG_prefetch_task( void* param ) {
     return NULL;
 }
 
-int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* route_metadata, struct fskit_entry* fent, off_t offset, void* handle_data ) {
+int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* route_metadata, struct fskit_entry* fent, off_t offset, void* handle_data, bool force ) {
     int rc = 0;
     struct UG_file_handle* fh = (struct UG_file_handle*)handle_data;
     int prefetch_tasks_in_queue = 0;
@@ -1982,9 +1982,16 @@ int UG_prefetch_impl( struct fskit_core* core, struct fskit_route_metadata* rout
     UG_read_prefetch_queue_clear_stale(fh->prefetch_queue, offset);
 
     prefetch_tasks_in_queue = UG_read_prefetch_queue_len(fh->prefetch_queue);
-    if(prefetch_tasks_in_queue >= MAX_PREFETCH_LEN) {
-        // do not create too many
-        return -1;
+
+    if(!force) {
+        if(prefetch_tasks_in_queue >= MAX_PREFETCH_LEN) {
+            // do not create too many
+            return -1;
+        }
+
+        if(!fh->prefetch_queue->perform_prefetch) {
+            return -1;
+        }
     }
 
     if(prefetch_tasks_in_queue > 0) {
@@ -2065,6 +2072,12 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
        UG_read_buffer_init(fh->read_buffer, fh->block_size);
    }
 
+   // footprint
+   off_t footprint_offset = UG_read_prefetch_block_offset(offset, fh->block_size);
+   if(UG_read_prefetch_queue_add_footprint(fh->prefetch_queue, footprint_offset) > 0) {
+       UG_read_prefetch_queue_determine_prefetch(fh->prefetch_queue);
+   }
+
    // start reading
    SG_debug("read from read buffer, offset %jd\n", offset);
    // has buffered data?
@@ -2106,7 +2119,7 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
                    if(!eof) {
                        // launch prefetching
                        req_offset += fh->block_size;
-                       UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data);
+                       UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data, false);
                    }
                    return total_read;
                }
@@ -2117,7 +2130,7 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
    // read on-demand
    SG_debug("read on-demand, offset %jd\n", offset + total_read);
    req_offset = UG_read_prefetch_block_offset(offset + total_read, fh->block_size);
-   UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data);
+   UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data, true);
 
    SG_debug("joining prefetch threads again %p\n", fh->prefetch_queue);
    rc = UG_read_prefetch_queue_join_first(fh->prefetch_queue);
@@ -2140,7 +2153,7 @@ int UG_read_buffered_impl( struct fskit_core* core, struct fskit_route_metadata*
                if(!eof) {
                    // launch prefetching
                    req_offset += fh->block_size;
-                   UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data);
+                   UG_prefetch_impl(core, route_metadata, fent, req_offset, handle_data, false);
                }
                return total_read;
            }

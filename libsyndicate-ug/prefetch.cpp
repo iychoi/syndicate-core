@@ -219,6 +219,8 @@ struct UG_read_prefetch_queue* UG_read_prefetch_queue_new() {
 }
 
 int UG_read_prefetch_queue_init(struct UG_read_prefetch_queue* queue) {
+    queue->footprint = SG_safe_new(UG_read_footprint_deque_t());
+    queue->perform_prefetch = false;
     queue->queue = SG_safe_new(UG_read_prefetch_queue_t());
     queue->signal_map = SG_safe_new(UG_read_prefetch_queue_signal_map_t());
 
@@ -252,6 +254,14 @@ int UG_read_prefetch_queue_free(struct UG_read_prefetch_queue* queue) {
         }
 
         SG_safe_delete(queue->queue);
+    }
+
+    if(queue->footprint != NULL) {
+        while(queue->footprint->size() > 0) {
+            queue->footprint->pop_front();
+        }
+
+        SG_safe_delete(queue->footprint);
     }
 
     UG_read_prefetch_queue_unlock(queue);
@@ -455,6 +465,83 @@ int UG_read_prefetch_queue_clear_stale(struct UG_read_prefetch_queue* queue, off
             break;
         }
     }
+    UG_read_prefetch_queue_unlock(queue);
+    return 0;
+}
+
+int UG_read_prefetch_queue_add_footprint(struct UG_read_prefetch_queue* queue, off_t offset) {
+    int result = 0;
+    UG_read_prefetch_queue_wlock(queue);
+    if(queue->footprint->size() > 0) {
+        off_t last_offset = queue->footprint->back();
+        if(last_offset != offset) {
+            queue->footprint->push_back(offset);
+            result = 1;
+        }
+    }
+
+    while(queue->footprint->size() > MAX_FOOTPRINT_LEN) {
+        queue->queue->pop_front();
+    }
+    UG_read_prefetch_queue_unlock(queue);
+    return result;
+}
+
+bool UG_read_prefetch_queue_check_prefetch_available(struct UG_read_prefetch_queue* queue) {
+    bool linear = true;
+    UG_read_prefetch_queue_rlock(queue);
+    if(queue->footprint->size() >= MAX_FOOTPRINT_LEN) {
+        off_t prev = -1;
+        for( UG_read_footprint_deque_t::iterator itr = queue->footprint->begin(); itr != queue->footprint->end(); itr++ ) {
+            off_t offset = *itr;
+            if(prev < 0) {
+                prev = offset;
+            } else {
+                if(prev >= offset) {
+                    // not linear
+                    linear = false;
+                    break;
+                }
+            }
+        }
+    } else {
+        // not enough length footprint
+        linear = false;
+    }
+    UG_read_prefetch_queue_unlock(queue);
+    return linear;
+}
+
+int UG_read_prefetch_queue_set_prefetch_perform(struct UG_read_prefetch_queue* queue, bool perform) {
+    UG_read_prefetch_queue_wlock(queue);
+    queue->perform_prefetch = perform;
+    UG_read_prefetch_queue_unlock(queue);
+    return 0;
+}
+
+int UG_read_prefetch_queue_determine_prefetch(struct UG_read_prefetch_queue* queue) {
+    bool linear = true;
+    UG_read_prefetch_queue_rlock(queue);
+    if(queue->footprint->size() >= MAX_FOOTPRINT_LEN) {
+        off_t prev = -1;
+        for( UG_read_footprint_deque_t::iterator itr = queue->footprint->begin(); itr != queue->footprint->end(); itr++ ) {
+            off_t offset = *itr;
+            if(prev < 0) {
+                prev = offset;
+            } else {
+                if(prev >= offset) {
+                    // not linear
+                    linear = false;
+                    break;
+                }
+            }
+        }
+    } else {
+        // not enough length footprint
+        linear = false;
+    }
+
+    queue->perform_prefetch = linear;
     UG_read_prefetch_queue_unlock(queue);
     return 0;
 }
