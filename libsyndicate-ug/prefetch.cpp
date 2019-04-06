@@ -481,7 +481,7 @@ int UG_read_prefetch_queue_add_footprint(struct UG_read_prefetch_queue* queue, o
     }
 
     while(queue->footprint->size() > MAX_FOOTPRINT_LEN) {
-        queue->queue->pop_front();
+        queue->footprint->pop_front();
     }
     UG_read_prefetch_queue_unlock(queue);
     return result;
