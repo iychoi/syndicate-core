@@ -127,7 +127,8 @@ int UG_read_prefetch_queue_clear_stale(struct UG_read_prefetch_queue* queue, off
 int UG_read_prefetch_queue_add_footprint(struct UG_read_prefetch_queue* queue, off_t offset);
 bool UG_read_prefetch_queue_check_prefetch_available(struct UG_read_prefetch_queue* queue);
 int UG_read_prefetch_queue_set_prefetch_perform(struct UG_read_prefetch_queue* queue, bool perform);
-int UG_read_prefetch_queue_determine_prefetch(struct UG_read_prefetch_queue* queue);
+bool UG_read_prefetch_queue_determine_prefetch(struct UG_read_prefetch_queue* queue);
+bool UG_read_prefetch_queue_add_footprint_and_determine_prefetch(struct UG_read_prefetch_queue* queue, off_t offset);
 
 struct UG_read_prefetch_queue_signal* UG_read_prefetch_queue_signal_new();
 int UG_read_prefetch_queue_signal_init(struct UG_read_prefetch_queue_signal* sig);

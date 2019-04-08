@@ -478,6 +478,9 @@ int UG_read_prefetch_queue_add_footprint(struct UG_read_prefetch_queue* queue, o
             queue->footprint->push_back(offset);
             result = 1;
         }
+    } else {
+        queue->footprint->push_back(offset);
+        result = 1;
     }
 
     while(queue->footprint->size() > MAX_FOOTPRINT_LEN) {
@@ -519,9 +522,9 @@ int UG_read_prefetch_queue_set_prefetch_perform(struct UG_read_prefetch_queue* q
     return 0;
 }
 
-int UG_read_prefetch_queue_determine_prefetch(struct UG_read_prefetch_queue* queue) {
+bool UG_read_prefetch_queue_determine_prefetch(struct UG_read_prefetch_queue* queue) {
     bool linear = true;
-    UG_read_prefetch_queue_rlock(queue);
+    UG_read_prefetch_queue_wlock(queue);
     if(queue->footprint->size() >= MAX_FOOTPRINT_LEN) {
         off_t prev = -1;
         for( UG_read_footprint_deque_t::iterator itr = queue->footprint->begin(); itr != queue->footprint->end(); itr++ ) {
@@ -543,7 +546,47 @@ int UG_read_prefetch_queue_determine_prefetch(struct UG_read_prefetch_queue* que
 
     queue->perform_prefetch = linear;
     UG_read_prefetch_queue_unlock(queue);
-    return 0;
+    return linear;
+}
+
+bool UG_read_prefetch_queue_add_footprint_and_determine_prefetch(struct UG_read_prefetch_queue* queue, off_t offset) {
+    bool linear = true;
+    UG_read_prefetch_queue_wlock(queue);
+    if(queue->footprint->size() > 0) {
+        off_t last_offset = queue->footprint->back();
+        if(last_offset != offset) {
+            queue->footprint->push_back(offset);
+        }
+    } else {
+        queue->footprint->push_back(offset);
+    }
+
+    while(queue->footprint->size() > MAX_FOOTPRINT_LEN) {
+        queue->footprint->pop_front();
+    }
+
+    if(queue->footprint->size() >= MAX_FOOTPRINT_LEN) {
+        off_t prev = -1;
+        for( UG_read_footprint_deque_t::iterator itr = queue->footprint->begin(); itr != queue->footprint->end(); itr++ ) {
+            off_t offset = *itr;
+            if(prev < 0) {
+                prev = offset;
+            } else {
+                if(prev >= offset) {
+                    // not linear
+                    linear = false;
+                    break;
+                }
+            }
+        }
+    } else {
+        // not enough length footprint
+        linear = false;
+    }
+
+    queue->perform_prefetch = linear;
+    UG_read_prefetch_queue_unlock(queue);
+    return linear;
 }
 
 struct UG_read_prefetch_queue_signal* UG_read_prefetch_queue_signal_new() {
