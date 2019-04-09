@@ -411,13 +411,20 @@ int UG_read_prefetch_queue_retrieve_data(struct UG_read_prefetch_queue* queue, s
         UG_read_buffer_wlock(buffer);
 
         if(UG_read_buffer_check_offset_no_lock(prefetch->buffer, offset)) {
-            memcpy(buffer->buffer, prefetch->buffer->buffer, prefetch->buffer->data_len);
-            buffer->offset = prefetch->buffer->offset;
-            buffer->data_len = prefetch->buffer->data_len;
-            buffer->eof = prefetch->buffer->eof;
-            buffer->block_size = prefetch->buffer->block_size;
+            SG_debug("Copying data from a prefetch buffer to a buffer %p -> %p (%d)\n", prefetch->buffer->buffer, buffer->buffer, prefetch->buffer->data_len);
+            
+            if(prefetch->buffer->data_len >= 0) {
+                memcpy(buffer->buffer, prefetch->buffer->buffer, prefetch->buffer->data_len);
+                buffer->offset = prefetch->buffer->offset;
+                buffer->data_len = prefetch->buffer->data_len;
+                buffer->eof = prefetch->buffer->eof;
+                buffer->block_size = prefetch->buffer->block_size;
+                rc = 0;
+            } else {
+                rc = -1;
+            }
+
             queue->queue->pop();
-            rc = 0;
 
             UG_read_buffer_unlock(buffer);
             UG_read_buffer_unlock(prefetch->buffer);

@@ -1956,6 +1956,7 @@ static void* UG_prefetch_task( void* param ) {
     int read_len = UG_read_prefetch_impl(gateway, fs_path, prefetch_buffer->buffer, fh->block_size, offset, fh);
     if(read_len < 0) {
         // fail
+        SG_debug("Prefetch task %s failed, offset %jd\n", fs_path, offset);
         prefetch_buffer->data_len = read_len;
     } else {
         prefetch_buffer->data_len = read_len;
