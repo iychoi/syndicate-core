@@ -1953,6 +1953,7 @@ static void* UG_prefetch_task( void* param ) {
     prefetch_buffer->data_len = 0;
     prefetch_buffer->eof = false;
 
+    SG_debug("IYCHOI - BEGIN Prefetch task %s, offset %jd\n", fs_path, offset);
     int read_len = UG_read_prefetch_impl(gateway, fs_path, prefetch_buffer->buffer, fh->block_size, offset, fh);
     if(read_len < 0) {
         // fail
@@ -1965,6 +1966,8 @@ static void* UG_prefetch_task( void* param ) {
             prefetch_buffer->eof = true;
         }
     }
+
+    SG_debug("IYCHOI - END Prefetch task %s, offset %jd\n", fs_path, offset);
 
     UG_read_buffer_unlock(prefetch_buffer);
     UG_read_prefetch_unlock(prefetch);
